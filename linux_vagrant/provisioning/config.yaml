@@ -1,0 +1,3 @@
+---
+kernel_src: /mnt/linux-bcache
+rdma_core_src: /mnt//rdma-core

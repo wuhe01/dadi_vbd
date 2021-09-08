@@ -14,6 +14,7 @@
 
 #include <linux/uaccess.h>
 
+#define OVERLAY_VBD_MAJOR       231
 #define PAGE_SECTORS_SHIFT	(PAGE_SHIFT - SECTOR_SHIFT)
 #define PAGE_SECTORS		(1 << PAGE_SECTORS_SHIFT)
 
@@ -333,7 +334,7 @@ module_param(max_part, int, S_IRUGO);
 MODULE_PARM_DESC(max_part, "Num Minors to reserve between devices");
 
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_BLOCKDEV_MAJOR(RAMDISK_MAJOR);
+MODULE_ALIAS_BLOCKDEV_MAJOR(OVERLAY_VBD_MAJOR_MAJOR);
 MODULE_ALIAS("ovbd");
 
 #ifndef MODULE
@@ -353,7 +354,6 @@ __setup("ramdisk_size=", ramdisk_size);
 static LIST_HEAD(ovbd_devices);
 static DEFINE_MUTEX(ovbd_devices_mutex);
 
-#define OVERLAY_VBD_MAJOR  231
 static struct ovbd_device *ovbd_alloc(int i)
 {
 	struct ovbd_device *ovbd;
@@ -475,7 +475,7 @@ static int __init ovbd_init(void)
 	 *	dynamically.
 	 */
 
-	if (register_blkdev(RAMDISK_MAJOR, "ramdisk"))
+	if (register_blkdev(OVERLAY_VBD_MAJOR, "ovdb"))
 		return -EIO;
 
 	if (unlikely(!max_part))
@@ -493,7 +493,7 @@ static int __init ovbd_init(void)
 	list_for_each_entry(ovbd, &ovbd_devices, ovbd_list)
 		add_disk(ovbd->ovbd_disk);
 
-	blk_register_region(MKDEV(RAMDISK_MAJOR, 0), 1UL << MINORBITS,
+	blk_register_region(MKDEV(OVERLAY_VBD_MAJOR, 0), 1UL << MINORBITS,
 				  THIS_MODULE, ovbd_probe, NULL, NULL);
 
 	pr_info("ovbd: module loaded\n");
@@ -504,7 +504,7 @@ out_free:
 		list_del(&ovbd->ovbd_list);
 		ovbd_free(ovbd);
 	}
-	unregister_blkdev(RAMDISK_MAJOR, "ramdisk");
+	unregister_blkdev(OVERLAY_VBD_MAJOR, "ovdb");
 
 	pr_info("ovbd: module NOT loaded !!!\n");
 	return -ENOMEM;
@@ -517,8 +517,8 @@ static void __exit ovbd_exit(void)
 	list_for_each_entry_safe(ovbd, next, &ovbd_devices, ovbd_list)
 		ovbd_del_one(ovbd);
 
-	blk_unregister_region(MKDEV(RAMDISK_MAJOR, 0), 1UL << MINORBITS);
-	unregister_blkdev(RAMDISK_MAJOR, "ramdisk");
+	blk_unregister_region(MKDEV(OVERLAY_VBD_MAJOR, 0), 1UL << MINORBITS);
+	unregister_blkdev(OVERLAY_VBD_MAJOR, "ovdb");
 
 	pr_info("ovbd: module unloaded\n");
 }
