@@ -1,8 +1,8 @@
 MYPROC= overlay_vbd
 obj-m += $(MYPROC).o
 
-#export KROOT=/lib/modules/$(shell uname -r)/build
-export KROOT=/mnt/linux-bcache
+export KROOT=/lib/modules/$(shell uname -r)/build
+#export KROOT=/mnt/linux-bcache
 #export KROOT=/lib/modules/$(uname)3.2.0-23-generic/build
 
 allofit:  modules

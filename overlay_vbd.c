@@ -1,3 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Ram backed block device driver.
+ *
+ * Copyright (C) 2007 Nick Piggin
+ * Copyright (C) 2007 Novell Inc.
+ *
+ * Parts derived from drivers/block/rd.c, and drivers/block/loop.c, copyright
+ * of their respective owners.
+ */
+
 #include <linux/init.h>
 #include <linux/initrd.h>
 #include <linux/module.h>
@@ -14,12 +25,12 @@
 
 #include <linux/uaccess.h>
 
-#define OVERLAY_VBD_MAJOR       231
 #define PAGE_SECTORS_SHIFT	(PAGE_SHIFT - SECTOR_SHIFT)
 #define PAGE_SECTORS		(1 << PAGE_SECTORS_SHIFT)
+#define OVERLAY_VBD_MAJOR       231
 
 /*
- * Each block ramdisk device has a radix_tree ovbd_pages of pages that stores
+ * Each block vdb device has a radix_tree ovbd_pages of pages that stores
  * the pages containing the block device's contents. A ovbd page's ->index is
  * its offset in PAGE_SIZE units. This is similar to, but in no way connected
  * with, the kernel's pagecache or buffer cache (which sit above our block
@@ -87,13 +98,8 @@ static struct page *ovbd_insert_page(struct ovbd_device *ovbd, sector_t sector)
 	/*
 	 * Must use NOIO because we don't want to recurse back into the
 	 * block or filesystem layers from page reclaim.
-	 *
-	 * Cannot support DAX and highmem, because our ->direct_access
-	 * routine for DAX must return memory that is always addressable.
-	 * If DAX was reworked to use pfns and kmap throughout, this
-	 * restriction might be able to be lifted.
 	 */
-	gfp_flags = GFP_NOIO | __GFP_ZERO;
+	gfp_flags = GFP_NOIO | __GFP_ZERO | __GFP_HIGHMEM;
 	page = alloc_page(gfp_flags);
 	if (!page)
 		return NULL;
@@ -147,6 +153,12 @@ static void ovbd_free_pages(struct ovbd_device *ovbd)
 		}
 
 		pos++;
+
+		/*
+		 * It takes 3.4 seconds to remove 80GiB vdb.
+		 * So, we need cond_resched to avoid stalling the CPU.
+		 */
+		cond_resched();
 
 		/*
 		 * This assumes radix_tree_gang_lookup always returns as
@@ -245,20 +257,20 @@ static void copy_from_ovbd(void *dst, struct ovbd_device *ovbd,
  * Process a single bvec of a bio.
  */
 static int ovbd_do_bvec(struct ovbd_device *ovbd, struct page *page,
-			unsigned int len, unsigned int off, bool is_write,
+			unsigned int len, unsigned int off, unsigned int op,
 			sector_t sector)
 {
 	void *mem;
 	int err = 0;
 
-	if (is_write) {
+	if (op_is_write(op)) {
 		err = copy_to_ovbd_setup(ovbd, sector, len);
 		if (err)
 			goto out;
 	}
 
 	mem = kmap_atomic(page);
-	if (!is_write) {
+	if (!op_is_write(op)) {
 		copy_from_ovbd(mem + off, ovbd, sector, len);
 		flush_dcache_page(page);
 	} else {
@@ -271,23 +283,23 @@ out:
 	return err;
 }
 
-static blk_qc_t ovbd_make_request(struct request_queue *q, struct bio *bio)
+static blk_qc_t ovbd_submit_bio(struct bio *bio)
 {
-	struct ovbd_device *ovbd = bio->bi_disk->private_data;
+	struct ovbd_device *ovbd = bio->bi_bdev->bd_disk->private_data;
+	sector_t sector = bio->bi_iter.bi_sector;
 	struct bio_vec bvec;
-	sector_t sector;
 	struct bvec_iter iter;
-
-	sector = bio->bi_iter.bi_sector;
-	if (bio_end_sector(bio) > get_capacity(bio->bi_disk))
-		goto io_error;
 
 	bio_for_each_segment(bvec, bio, iter) {
 		unsigned int len = bvec.bv_len;
 		int err;
 
+		/* Don't support un-aligned buffer */
+		WARN_ON_ONCE((bvec.bv_offset & (SECTOR_SIZE - 1)) ||
+				(len & (SECTOR_SIZE - 1)));
+
 		err = ovbd_do_bvec(ovbd, bvec.bv_page, len, bvec.bv_offset,
-					op_is_write(bio_op(bio)), sector);
+				  bio_op(bio), sector);
 		if (err)
 			goto io_error;
 		sector += len >> SECTOR_SHIFT;
@@ -301,20 +313,21 @@ io_error:
 }
 
 static int ovbd_rw_page(struct block_device *bdev, sector_t sector,
-		       struct page *page, bool is_write)
+		       struct page *page, unsigned int op)
 {
 	struct ovbd_device *ovbd = bdev->bd_disk->private_data;
 	int err;
 
 	if (PageTransHuge(page))
 		return -ENOTSUPP;
-	err = ovbd_do_bvec(ovbd, page, PAGE_SIZE, 0, is_write, sector);
-	page_endio(page, is_write, err);
+	err = ovbd_do_bvec(ovbd, page, PAGE_SIZE, 0, op, sector);
+	page_endio(page, op_is_write(op), err);
 	return err;
 }
 
 static const struct block_device_operations ovbd_fops = {
 	.owner =		THIS_MODULE,
+	.submit_bio =		ovbd_submit_bio,
 	.rw_page =		ovbd_rw_page,
 };
 
@@ -322,29 +335,29 @@ static const struct block_device_operations ovbd_fops = {
  * And now the modules code and kernel interface.
  */
 static int rd_nr = CONFIG_BLK_DEV_RAM_COUNT;
-module_param(rd_nr, int, S_IRUGO);
+module_param(rd_nr, int, 0444);
 MODULE_PARM_DESC(rd_nr, "Maximum number of ovbd devices");
 
 unsigned long rd_size = CONFIG_BLK_DEV_RAM_SIZE;
-module_param(rd_size, ulong, S_IRUGO);
+module_param(rd_size, ulong, 0444);
 MODULE_PARM_DESC(rd_size, "Size of each RAM disk in kbytes.");
 
 static int max_part = 1;
-module_param(max_part, int, S_IRUGO);
+module_param(max_part, int, 0444);
 MODULE_PARM_DESC(max_part, "Num Minors to reserve between devices");
 
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_BLOCKDEV_MAJOR(OVERLAY_VBD_MAJOR_MAJOR);
-MODULE_ALIAS("ovbd");
+MODULE_ALIAS_BLOCKDEV_MAJOR(OVERLAY_VBD_MAJOR);
+MODULE_ALIAS("rd");
 
 #ifndef MODULE
 /* Legacy boot options - nonmodular */
-static int __init ramdisk_size(char *str)
+static int __init vdb_size(char *str)
 {
 	rd_size = simple_strtol(str, NULL, 0);
 	return 1;
 }
-__setup("ramdisk_size=", ramdisk_size);
+__setup("vdb_size=", vdb_size);
 #endif
 
 /*
@@ -366,12 +379,9 @@ static struct ovbd_device *ovbd_alloc(int i)
 	spin_lock_init(&ovbd->ovbd_lock);
 	INIT_RADIX_TREE(&ovbd->ovbd_pages, GFP_ATOMIC);
 
-	ovbd->ovbd_queue = blk_alloc_queue(GFP_KERNEL);
+	ovbd->ovbd_queue = blk_alloc_queue(NUMA_NO_NODE);
 	if (!ovbd->ovbd_queue)
 		goto out_free_dev;
-
-	blk_queue_make_request(ovbd->ovbd_queue, ovbd_make_request);
-	blk_queue_max_hw_sectors(ovbd->ovbd_queue, 1024);
 
 	/* This is so fdisk will align partitions on 4k, because of
 	 * direct_access API needing 4k alignment, returning a PFN
@@ -387,11 +397,13 @@ static struct ovbd_device *ovbd_alloc(int i)
 	disk->first_minor	= i * max_part;
 	disk->fops		= &ovbd_fops;
 	disk->private_data	= ovbd;
-	disk->queue		= ovbd->ovbd_queue;
 	disk->flags		= GENHD_FL_EXT_DEVT;
 	sprintf(disk->disk_name, "ram%d", i);
 	set_capacity(disk, rd_size * 2);
-	disk->queue->backing_dev_info->capabilities |= BDI_CAP_SYNCHRONOUS_IO;
+
+	/* Tell the block layer that this is not a rotational device */
+	blk_queue_flag_set(QUEUE_FLAG_NONROT, ovbd->ovbd_queue);
+	blk_queue_flag_clear(QUEUE_FLAG_ADD_RANDOM, ovbd->ovbd_queue);
 
 	return ovbd;
 
@@ -411,24 +423,26 @@ static void ovbd_free(struct ovbd_device *ovbd)
 	kfree(ovbd);
 }
 
-static struct ovbd_device *ovbd_init_one(int i, bool *new)
+static void ovbd_probe(dev_t dev)
 {
 	struct ovbd_device *ovbd;
+	int i = MINOR(dev) / max_part;
 
-	*new = false;
+	mutex_lock(&ovbd_devices_mutex);
 	list_for_each_entry(ovbd, &ovbd_devices, ovbd_list) {
 		if (ovbd->ovbd_number == i)
-			goto out;
+			goto out_unlock;
 	}
 
 	ovbd = ovbd_alloc(i);
 	if (ovbd) {
+		ovbd->ovbd_disk->queue = ovbd->ovbd_queue;
 		add_disk(ovbd->ovbd_disk);
 		list_add_tail(&ovbd->ovbd_list, &ovbd_devices);
 	}
-	*new = true;
-out:
-	return ovbd;
+
+out_unlock:
+	mutex_unlock(&ovbd_devices_mutex);
 }
 
 static void ovbd_del_one(struct ovbd_device *ovbd)
@@ -438,21 +452,23 @@ static void ovbd_del_one(struct ovbd_device *ovbd)
 	ovbd_free(ovbd);
 }
 
-static struct kobject *ovbd_probe(dev_t dev, int *part, void *data)
+static inline void ovbd_check_and_reset_par(void)
 {
-	struct ovbd_device *ovbd;
-	struct kobject *kobj;
-	bool new;
+	if (unlikely(!max_part))
+		max_part = 1;
 
-	mutex_lock(&ovbd_devices_mutex);
-	ovbd = ovbd_init_one(MINOR(dev) / max_part, &new);
-	kobj = ovbd ? get_disk_and_module(ovbd->ovbd_disk) : NULL;
-	mutex_unlock(&ovbd_devices_mutex);
+	/*
+	 * make sure 'max_part' can be divided exactly by (1U << MINORBITS),
+	 * otherwise, it is possiable to get same dev_t when adding partitions.
+	 */
+	if ((1U << MINORBITS) % max_part != 0)
+		max_part = 1UL << fls(max_part);
 
-	if (new)
-		*part = 0;
-
-	return kobj;
+	if (max_part > DISK_MAX_PARTS) {
+		pr_info("ovbd: max_part can't be larger than %d, reset max_part = %d.\n",
+			DISK_MAX_PARTS, DISK_MAX_PARTS);
+		max_part = DISK_MAX_PARTS;
+	}
 }
 
 static int __init ovbd_init(void)
@@ -475,12 +491,12 @@ static int __init ovbd_init(void)
 	 *	dynamically.
 	 */
 
-	if (register_blkdev(OVERLAY_VBD_MAJOR, "ovdb"))
+	if (__register_blkdev(OVERLAY_VBD_MAJOR, "vdb", ovbd_probe))
 		return -EIO;
 
-	if (unlikely(!max_part))
-		max_part = 1;
+	ovbd_check_and_reset_par();
 
+	mutex_lock(&ovbd_devices_mutex);
 	for (i = 0; i < rd_nr; i++) {
 		ovbd = ovbd_alloc(i);
 		if (!ovbd)
@@ -490,11 +506,15 @@ static int __init ovbd_init(void)
 
 	/* point of no return */
 
-	list_for_each_entry(ovbd, &ovbd_devices, ovbd_list)
+	list_for_each_entry(ovbd, &ovbd_devices, ovbd_list) {
+		/*
+		 * associate with queue just before adding disk for
+		 * avoiding to mess up failure path
+		 */
+		ovbd->ovbd_disk->queue = ovbd->ovbd_queue;
 		add_disk(ovbd->ovbd_disk);
-
-	blk_register_region(MKDEV(OVERLAY_VBD_MAJOR, 0), 1UL << MINORBITS,
-				  THIS_MODULE, ovbd_probe, NULL, NULL);
+	}
+	mutex_unlock(&ovbd_devices_mutex);
 
 	pr_info("ovbd: module loaded\n");
 	return 0;
@@ -504,7 +524,8 @@ out_free:
 		list_del(&ovbd->ovbd_list);
 		ovbd_free(ovbd);
 	}
-	unregister_blkdev(OVERLAY_VBD_MAJOR, "ovdb");
+	mutex_unlock(&ovbd_devices_mutex);
+	unregister_blkdev(OVERLAY_VBD_MAJOR, "vdb");
 
 	pr_info("ovbd: module NOT loaded !!!\n");
 	return -ENOMEM;
@@ -517,8 +538,7 @@ static void __exit ovbd_exit(void)
 	list_for_each_entry_safe(ovbd, next, &ovbd_devices, ovbd_list)
 		ovbd_del_one(ovbd);
 
-	blk_unregister_region(MKDEV(OVERLAY_VBD_MAJOR, 0), 1UL << MINORBITS);
-	unregister_blkdev(OVERLAY_VBD_MAJOR, "ovdb");
+	unregister_blkdev(OVERLAY_VBD_MAJOR, "vdb");
 
 	pr_info("ovbd: module unloaded\n");
 }
