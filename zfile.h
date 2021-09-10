@@ -109,10 +109,6 @@ struct zfile_file {
 
 
 // open a zfile layer
-struct zfile_ro_file* open_zfile(unsigned char* file, bool ownership);
+bool open_zfile(const char* file, bool ownership);
 
-// open multi zfile layers
-struct zfile_ro_file *open_files(void **files, size_t n, bool ownership);
-
-        
 #endif

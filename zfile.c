@@ -2,10 +2,8 @@
 #include <asm/segment.h>
 //#include <asm/uaccess.h>
 #include <linux/buffer_head.h>
-#include <linux/module.h>
-#include <linux/moduleparam.h>
-
-MODULE_LICENSE("GPL");
+#include <linux/slab.h>
+#include "zfile.h"
 
 struct file *file_open(const char *path, int flags, int rights) 
 {
@@ -24,30 +22,36 @@ void file_close(struct file *file)
     filp_close(file, NULL);
 }
 
-unsigned int file_read(struct file *file, unsigned long long offset, unsigned char *data, unsigned int size) 
+size_t file_read(struct file *file, void *buf, size_t count, loff_t *pos)  
 {
-    unsigned int i;
-    unsigned int ret = kernel_read(file, offset, data, size);
-    if (ret != size) {
-       printk("reading data failed at %d", offset);
+    unsigned int ret = kernel_read(file, buf, count, pos);
+    if (!ret) {
+       printk("reading data failed at %d", pos);
     }
     return ret;
-}   
+}  
 
-struct zfile_ro_file* open_zfile(const char *path, bool ownership) {
+bool open_zfile(const char* path, bool ownership) {
    printk ("Trying to open zfile %s", path);
    unsigned int ret;
-   unsigned char* header;
+   unsigned int i;
+   unsigned char *header;
    struct file* fp = file_open( path, 0, 644);
    if (!fp) {
 	   printk("Canot open zfile %s\n", path);
-	   return NULL;
-   }
-  
-   ret = file_read (fp, 0, header, 512);
-   if (ret != 512) {
-	   printk ("Error, reading file failed\n");
-	   return NULL;
+	   return false;
    }
 
+   header = kmalloc(HT_SPACE, GFP_KERNEL);
+   for ( i = 0 ; ; i++) {
+	 loff_t pos = i * HT_SPACE;
+	 size_t res = file_read(fp, header, HT_SPACE, &pos);
+         if (res > 0) {
+		 printk ("data [%s] ;\n", header);
+	 } else {
+		 printk ("error happened\n");
+		 return false;
+	 }
+   }
+   return true;
 }
