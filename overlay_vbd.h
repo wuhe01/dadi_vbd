@@ -8,6 +8,7 @@
 
 #include <linux/err.h>
 #include <linux/printk.h>
+#include <linux/uuid.h>
 
 #define PRINT_INFO(fmt, ...)                                     \
 	do { if ((HBDEBUG)) \
@@ -73,7 +74,7 @@ static struct _UUID MAGIC1 = {
 
 struct zfile_ht {
   uint64_t magic0;
-  struct _UUID magic1;
+  uuid_t magic1;
   // offset 24, 28
   uint32_t size;  //= sizeof(HeaderTrailer);
   uint32_t flags; //= 0;
@@ -87,7 +88,8 @@ struct zfile_ht {
 
   struct compress_options opt;
   uint8_t pad[4];
-} __attribute__((packed));
+}  __packed; 
+
 
 struct jump_table {
    uint64_t partial_offset; // 48 bits logical offset + 16 bits partial minimum
@@ -108,7 +110,34 @@ struct zfile_file {
 } __attribute__((packed));
 
 
+/*
+ * Each block ovbd device has a radix_tree ovbd_pages of pages that stores
+ * the pages containing the block device's contents. A ovbd page's ->index is
+ * its offset in PAGE_SIZE units. This is similar to, but in no way connected
+ * with, the kernel's pagecache or buffer cache (which sit above our block
+ * device).
+ */
+struct ovbd_device {
+	int		ovbd_number;
+
+	struct request_queue	*ovbd_queue;
+	struct gendisk		*ovbd_disk;
+	struct list_head	ovbd_list;
+
+	/*
+	 * Backing store of pages and lock to protect it. This is the contents
+	 * of the block device.
+	 */
+	spinlock_t		ovbd_lock;
+	struct radix_tree_root	ovbd_pages;
+
+	uint64_t partial_offset[ 200 ];
+        uint16_t deltas[1<<16 - 1];
+	uint16_t block_size;
+
+};
+
 // open a zfile layer
-bool open_zfile(const char* file, bool ownership);
+bool open_zfile( struct ovbd_device *odev, const char* file,  bool ownership);
 
 #endif

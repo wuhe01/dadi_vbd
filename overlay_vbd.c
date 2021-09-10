@@ -30,28 +30,6 @@
 #define PAGE_SECTORS		(1 << PAGE_SECTORS_SHIFT)
 #define OVBD_MAJOR  		231
 /*
- * Each block ovbd device has a radix_tree ovbd_pages of pages that stores
- * the pages containing the block device's contents. A ovbd page's ->index is
- * its offset in PAGE_SIZE units. This is similar to, but in no way connected
- * with, the kernel's pagecache or buffer cache (which sit above our block
- * device).
- */
-struct ovbd_device {
-	int		ovbd_number;
-
-	struct request_queue	*ovbd_queue;
-	struct gendisk		*ovbd_disk;
-	struct list_head	ovbd_list;
-
-	/*
-	 * Backing store of pages and lock to protect it. This is the contents
-	 * of the block device.
-	 */
-	spinlock_t		ovbd_lock;
-	struct radix_tree_root	ovbd_pages;
-};
-
-/*
  * Look up and return a ovbd's page for a given sector.
  */
 static struct page *ovbd_lookup_page(struct ovbd_device *ovbd, sector_t sector)
@@ -544,7 +522,8 @@ static int __init ovbd_init(void)
 
 	pr_info("ovbd: module loaded\n");
 	
-	open_zfile(backfile, true);
+	struct ovbd_device* backed_ovbd = list_first_entry_or_null(&ovbd->ovbd_list, struct ovbd_device, ovbd_list);
+	open_zfile(backed_ovbd, backfile, true);
 
 	return 0;
 
