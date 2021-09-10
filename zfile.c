@@ -4,7 +4,7 @@
 #include <linux/buffer_head.h>
 #include <linux/slab.h>
 #include <linux/lz4.h>
-#include "zfile.h"
+#include "overlay_vbd.h"
 
 struct file *file_open(const char *path, int flags, int rights) 
 {
@@ -60,6 +60,7 @@ size_t get_range ( struct ovbd_device *odev, size_t idx) {
      uint16_t local_min = odev->partial_offset[part_idx] & ((1 << DEFAULT_LSHIFT) - 1);
      uint64_t part_offset = odev->partial_offset[part_idx] >> DEFAULT_LSHIFT;
      off_t ret = part_offset + odev->deltas[idx] + (inner_idx)*local_min;
+     printk("get_range : %d , %d", idx, ret);
      return ret;
 
 }
@@ -86,7 +87,7 @@ bool test_decompress(struct ovbd_device* odev, size_t partial_size, size_t delta
 	   unsigned char *src_buf;
 	   unsigned char *dst_buf;
 
-	   src_buf = kmalloc(MAX_READ_SIZE, GFP_KERNEL);
+	   src_buf = kmalloc(stop_offset - start_offset, GFP_KERNEL);
 	   dst_buf = kmalloc(MAX_READ_SIZE, GFP_KERNEL);
            struct file* fp = file_open( "/test.c", 0, 644);
            size_t ret = file_read(fp, src_buf, stop_offset - start_offset, &start_offset);
@@ -103,32 +104,36 @@ bool test_decompress(struct ovbd_device* odev, size_t partial_size, size_t delta
 }
 
 bool build_jump_table(struct ovbd_device* odev, uint32_t *jt_saved, struct zfile_ht* pht) {
-   size_t i;
+  size_t i;
   int part_size = DEFAULT_PART_SIZE;
   off_t offset_begin = pht->opt.dict_size + ZF_SPACE;
-  size_t n = pht->index_size;
-  uint16_t local_min = 0;
+  size_t n = pht->index_size ;
+  uint16_t local_min;
   off_t raw_offset = offset_begin;
   uint16_t lshift = DEFAULT_LSHIFT;
   uint16_t last_delta;
+  printk("offset_begin %d", offset_begin);
   
+  local_min = 0;
   odev->partial_offset[0] = (raw_offset << lshift) + local_min;
   odev->deltas[0] = 0;
+
+  printk("partial_offset %d", odev->partial_offset[0]);
 
   uint16_t partial_size = 1;
   uint16_t deltas_size = 1;
 
 
     for (i = 1; i < (size_t) n + 1 ; ++i) {
-          //PRINT_INFO(" ibuf %d", ibuf[i-1]);
+          PRINT_INFO(" ibuf %d", (uint32_t) be32_to_cpu(jt_saved[i-1]));
           raw_offset += jt_saved[i - 1];
           last_delta = 0;
           if (( i % part_size) == 0 ) {
-                  local_min = inttype_max;
-                  printk(" get  %d", i);
-		  size_t j;
-                  for (j = i; j < min(n + 1, i + part_size ); j ++ )
-                          local_min = min(jt_saved[j - 1], local_min);
+                  local_min = 1<<16 - 1;
+                  printk(" local_min  %d", local_min);
+		  size_t j ;
+                  for (j = i; j < min( (size_t)(n + 1), (size_t)(i + part_size) ); j ++ )
+                          local_min = min( (uint16_t)jt_saved[j - 1], (uint16_t)local_min);
                   odev->partial_offset[i % part_size]  = (raw_offset << lshift) + local_min;
                   partial_size++;
                   odev->deltas[deltas_size++] = 0;
@@ -137,20 +142,19 @@ bool build_jump_table(struct ovbd_device* odev, uint32_t *jt_saved, struct zfile
                   continue;
           }
           odev->deltas[deltas_size++] = odev->deltas[i-1] + jt_saved[i-1] - local_min;
-          //last_delta = last_delta + ibuf[i-1] - local_min;
+          last_delta = last_delta + odev->deltas[i-1] - local_min;
 
           printk("delta %d, iterated %i", odev->deltas[i], i);
 
   }
   
-  test_decompress(odev, partial_size, deltas_size);
+//test_decompress(odev, partial_size, deltas_size);
 
   return true;
 
 }
 
 bool open_zfile(struct ovbd_device* odev , const char* path, bool ownership) {
-   printk ("Trying to open zfile %s", path);
    unsigned int ret, i;
    struct zfile_ht* zht;
    unsigned char* header_tail; 
@@ -184,11 +188,17 @@ bool open_zfile(struct ovbd_device* odev , const char* path, bool ownership) {
 
    jt_saved = kmalloc(jt_size, GFP_KERNEL);
    memset(jt_saved, 0, jt_size);
-   printk ("jt_save %x", jt_saved);
+   memset(odev->partial_offset, 0, 200);
+   memset(odev->deltas, 0, 1<<16-1);
+
    ret = file_read(fp, jt_saved, jt_size, &index_offset);
+   for (i =0 ; i < 4; i++) 
+	   printk("jt_saved[%d] = %d", i, (uint32_t)*(jt_saved+i));
+
    build_jump_table(odev, jt_saved, zht);
+
+   load_lsmt(odev, fp, file_size, ownership);
    
    kfree(header_tail);
-   kfree(jt_saved);
    return true;
 }

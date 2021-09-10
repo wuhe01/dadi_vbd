@@ -24,11 +24,12 @@
 #include <linux/backing-dev.h>
 
 #include <linux/uaccess.h>
-#include "zfile.h"
+#include "overlay_vbd.h"
 
 #define PAGE_SECTORS_SHIFT	(PAGE_SHIFT - SECTOR_SHIFT)
 #define PAGE_SECTORS		(1 << PAGE_SECTORS_SHIFT)
 #define OVBD_MAJOR  		231
+#define OVBD_CACHE_SIZE         536870912000    
 /*
  * Look up and return a ovbd's page for a given sector.
  */
@@ -149,7 +150,7 @@ static void ovbd_free_pages(struct ovbd_device *ovbd)
 /*
  * copy_to_ovbd_setup must be called before copy_to_ovbd. It may sleep.
  */
-static int copy_to_ovbd_setup(struct ovbd_device *ovbd, sector_t sector, size_t n)
+static int ovbd_prepare_page(struct ovbd_device *ovbd, sector_t sector, size_t n)
 {
 	unsigned int offset = (sector & (PAGE_SECTORS-1)) << SECTOR_SHIFT;
 	size_t copy;
@@ -165,12 +166,8 @@ static int copy_to_ovbd_setup(struct ovbd_device *ovbd, sector_t sector, size_t 
 	return 0;
 }
 
-/*
- * Copy n bytes from src to the ovbd starting at sector. Does not sleep.
- */
-static void copy_to_ovbd(struct ovbd_device *ovbd, const void *src,
-			sector_t sector, size_t n)
-{
+static bool ovbd_fill_page(struct ovbd_device *ovbd, sector_t sector, size_t n) {
+
 	struct page *page;
 	void *dst;
 	unsigned int offset = (sector & (PAGE_SECTORS-1)) << SECTOR_SHIFT;
@@ -180,21 +177,7 @@ static void copy_to_ovbd(struct ovbd_device *ovbd, const void *src,
 	page = ovbd_lookup_page(ovbd, sector);
 	BUG_ON(!page);
 
-	dst = kmap_atomic(page);
-	memcpy(dst + offset, src, copy);
-	kunmap_atomic(dst);
-
-	if (copy < n) {
-		src += copy;
-		sector += copy >> SECTOR_SHIFT;
-		copy = n - copy;
-		page = ovbd_lookup_page(ovbd, sector);
-		BUG_ON(!page);
-
-		dst = kmap_atomic(page);
-		memcpy(dst, src, copy);
-		kunmap_atomic(dst);
-	}
+	return true;
 }
 
 /*
@@ -214,8 +197,10 @@ static void copy_from_ovbd(void *dst, struct ovbd_device *ovbd,
 		src = kmap_atomic(page);
 		memcpy(dst, src + offset, copy);
 		kunmap_atomic(src);
-	} else
-		memset(dst, 0, copy);
+	} else {
+		ovbd_prepare_page(ovbd, sector, n);
+		ovbd_fill_page(ovbd, sector, n);
+	}
 
 	if (copy < n) {
 		dst += copy;
@@ -226,9 +211,11 @@ static void copy_from_ovbd(void *dst, struct ovbd_device *ovbd,
 			src = kmap_atomic(page);
 			memcpy(dst, src, copy);
 			kunmap_atomic(src);
-		} else
-			memset(dst, 0, copy);
-	}
+		} else {
+			ovbd_prepare_page(ovbd, sector, n);
+			ovbd_fill_page(ovbd, sector, n);
+		}
+	} 
 }
 
 /*
@@ -242,19 +229,12 @@ static int ovbd_do_bvec(struct ovbd_device *ovbd, struct page *page,
 	int err = 0;
 
 	if (op_is_write(op)) {
-		err = copy_to_ovbd_setup(ovbd, sector, len);
-		if (err)
-			goto out;
+		goto out;
 	}
 
 	mem = kmap_atomic(page);
-	if (!op_is_write(op)) {
-		copy_from_ovbd(mem + off, ovbd, sector, len);
-		flush_dcache_page(page);
-	} else {
-		flush_dcache_page(page);
-		copy_to_ovbd(ovbd, mem + off, sector, len);
-	}
+	copy_from_ovbd(mem + off, ovbd, sector, len);
+	flush_dcache_page(page);
 	kunmap_atomic(mem);
 
 out:
@@ -478,21 +458,6 @@ static int __init ovbd_init(void)
 {
 	struct ovbd_device *ovbd, *next;
 	int i;
-
-	/*
-	 * ovbd module now has a feature to instantiate underlying device
-	 * structure on-demand, provided that there is an access dev node.
-	 *
-	 * (1) if rd_nr is specified, create that many upfront. else
-	 *     it defaults to CONFIG_BLK_DEV_RAM_COUNT
-	 * (2) User can further extend ovbd devices by create dev node themselves
-	 *     and have kernel automatically instantiate actual device
-	 *     on-demand. Example:
-	 *		mknod /path/devnod_name b 1 X	# 1 is the rd major
-	 *		fdisk -l /path/devnod_name
-	 *	If (X / max_part) was not already created it will be created
-	 *	dynamically.
-	 */
 
 	if (register_blkdev(OVBD_MAJOR, "ovbd"))
 		return -EIO;
