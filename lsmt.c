@@ -7,6 +7,120 @@
 #include "overlay_vbd.h"
 
 
+static uint64_t segment_end(const void /* const struct segment */ *m) {
+  const struct segment *s = (const struct segment *)m;
+  return s->offset + s->length;
+}
+
+
+void forward_offset_to(void *m, uint64_t x, int8_t type) {
+  struct segment *s = (struct segment *)m;
+  ASSERT(x >= s->offset);
+  uint64_t delta = x - s->offset;
+  s->offset = x;
+  s->length -= delta;
+  if (type == TYPE_SEGMENT_MAPPING) {
+    struct segment_mapping *tmp = (struct segment_mapping *)m;
+    if (!tmp->zeroed) {
+      tmp->moffset += delta;
+    }
+  }
+}
+
+void backward_end_to(void *m, uint64_t x) {
+  struct segment *s = (struct segment *)m;
+  if (x <= s->offset) {
+    printk("%lu > %lu is FALSE", x, s->offset);
+  }
+
+  s->length = x - s->offset;
+}
+
+static void trim_edge(void *m, const struct segment *bound_segment,
+                      uint8_t type) {
+  if (((struct segment *)m)->offset < bound_segment->offset) {
+    forward_offset_to(m, bound_segment->offset, type);
+  }
+  if (segment_end(m) > segment_end(bound_segment)) {
+    backward_end_to(m, segment_end(bound_segment));
+  }
+}
+
+const struct segment_mapping *
+ro_index_lower_bound(const struct lsmt_ro_index *index, uint64_t offset) {
+  const struct segment_mapping *l = index->pbegin;
+  const struct segment_mapping *r = index->pend - 1;
+  int ret = -1;
+  while (l <= r) {
+    int m = ((l - index->pbegin) + (r - index->pbegin)) >> 1;
+    const struct segment_mapping *cmp = index->pbegin + m;
+    if (offset >= segment_end(cmp)) {
+      ret = m;
+      l = index->pbegin + (m + 1);
+    } else {
+      r = index->pbegin + (m - 1);
+    }
+  }
+  const struct segment_mapping *pret = index->pbegin + (ret + 1);
+  if (pret >= index->pend) {
+    return index->pend;
+  } else {
+    return pret;
+  }
+}
+
+int ro_index_lookup(const struct lsmt_ro_index *index,
+                    const struct segment *query_segment,
+                    struct segment_mapping *ret_mappings, size_t n) {
+  if (query_segment->length == 0)
+    return 0;
+  const struct segment_mapping *lb =
+      ro_index_lower_bound(index, query_segment->offset);
+  int cnt = 0;
+  const struct segment_mapping *it = lb;
+  for (; it != index->pend; it++) {
+    if (it->offset >= segment_end(query_segment))
+      break;
+    ret_mappings[cnt++] = *it;
+    if (cnt == n)
+      break;
+  }
+  if (cnt == 0)
+    return 0;
+  trim_edge(&ret_mappings[0], query_segment, TYPE_SEGMENT_MAPPING);
+  if (cnt > 1) {
+    trim_edge(&ret_mappings[cnt - 1], query_segment, TYPE_SEGMENT_MAPPING);
+  }
+  return cnt;
+}
+
+size_t ro_index_size(const struct lsmt_ro_index *index) {
+  return index->pend - index->pbegin;
+}
+
+struct lsmt_ro_index *
+build_memory_index(const struct segment_mapping *pmappings, size_t n,
+                    uint64_t moffset_begin, uint64_t moffset_end, bool copy) {
+  struct lsmt_ro_index *ret = NULL;
+    int index_size = sizeof(struct lsmt_ro_index);
+    if (copy) {
+      index_size += sizeof(struct lsmt_ro_index) * n;
+    }
+    ret = (struct lsmt_ro_index *)kmalloc(index_size, GFP_KERNEL);
+    if (!ret) {
+      return NULL;
+    }
+    if (!copy) {
+      ret->pbegin = pmappings;
+      ret->pend = pmappings + n;
+    } else {
+      memcpy(ret->mapping, pmappings, n * sizeof(struct segment_mapping));
+      ret->pbegin = ret->mapping;
+      ret->pend = ret->mapping + n;
+    }
+  return NULL;
+};
+
 bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool ownership) {
    unsigned int ret, i;
    struct lsmt_ht* pht;
@@ -16,8 +130,8 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool 
    unsigned char* header_tail; 
    loff_t pos = ZF_SPACE;
 
-   header_tail = kmalloc(HT_SPACE, GFP_KERNEL);
-   memset(header_tail, 0, HT_SPACE);
+   pht = kmalloc(HT_SPACE, GFP_KERNEL);
+   memset(pht, 0, HT_SPACE);
    ret = kernel_read(fp, header_tail, HT_SPACE, &pos);
    pht = (struct lsmt_ht*) header_tail;
    
