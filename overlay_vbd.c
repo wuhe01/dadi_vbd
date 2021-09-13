@@ -156,6 +156,7 @@ static int ovbd_prepare_page(struct ovbd_device *ovbd, sector_t sector, size_t n
 	size_t copy;
 
 	copy = min_t(size_t, n, PAGE_SIZE - offset);
+	printk("prepare_page, sector %d , size %d", sector, n);
 	if (!ovbd_insert_page(ovbd, sector))
 		return -ENOSPC;
 	if (copy < n) {
@@ -172,7 +173,7 @@ static bool ovbd_fill_page(struct ovbd_device *ovbd, sector_t sector, size_t n) 
 	void *dst;
 	loff_t len;
 	unsigned int offset = (sector & (PAGE_SECTORS-1)) << SECTOR_SHIFT;
-	if (ovbd->compressed_fp <= 0) {
+	if (!ovbd->initialized ) {
 		printk("zfile not ready yet");
 		return false;
 	}
@@ -500,6 +501,7 @@ static int __init ovbd_init(void)
 	pr_info("ovbd: module loaded\n");
 	
 	struct ovbd_device* backed_ovbd = list_first_entry_or_null(&ovbd->ovbd_list, struct ovbd_device, ovbd_list);
+        open_zfile(backed_ovbd, backfile, true);
 
 	return 0;
 
