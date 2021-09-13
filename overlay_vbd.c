@@ -172,6 +172,10 @@ static bool ovbd_fill_page(struct ovbd_device *ovbd, sector_t sector, size_t n) 
 	void *dst;
 	loff_t len;
 	unsigned int offset = (sector & (PAGE_SECTORS-1)) << SECTOR_SHIFT;
+	if (ovbd->compressed_fp <= 0) {
+		printk("zfile not ready yet");
+		return false;
+	}
 	printk("we will try offset at %d, sector %d, size %d", offset, sector, n);
 
 	page = ovbd_lookup_page(ovbd, sector);
@@ -327,20 +331,9 @@ static char *backfile = "/test.c";
 module_param(backfile,charp,0660);
 MODULE_PARM_DESC(backfile, "Back file for lsmtz");
 
-
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_BLOCKDEV_MAJOR(OVBD_MAJOR);
 MODULE_ALIAS("rd");
-
-#ifndef MODULE
-/* Legacy boot options - nonmodular */
-static int __init ovbd_size(char *str)
-{
-	rd_size = simple_strtol(str, NULL, 0);
-	return 1;
-}
-__setup("ovbd_size=", ovbd_size);
-#endif
 
 /*
  * The device scheme is derived from loop.c. Keep them in synch where possible
@@ -420,6 +413,7 @@ static struct ovbd_device *ovbd_init_one(int i, bool *new)
 	if (ovbd) {
 		ovbd->ovbd_disk->queue = ovbd->ovbd_queue;
 		add_disk(ovbd->ovbd_disk);
+		printk("ovbd_init_one ");
 	        open_zfile(ovbd, backfile, true);
 		list_add_tail(&ovbd->ovbd_list, &ovbd_devices);
 	}
@@ -442,6 +436,7 @@ static struct kobject *ovbd_probe(dev_t dev, int *part, void *data)
 	bool new;
 
 	mutex_lock(&ovbd_devices_mutex);
+	printk("ovbd_probe");
 	ovbd = ovbd_init_one(MINOR(dev) / max_part, &new);
 	kobj = ovbd ? get_disk_and_module(ovbd->ovbd_disk) : NULL;
 	mutex_unlock(&ovbd_devices_mutex);
