@@ -170,13 +170,29 @@ static bool ovbd_fill_page(struct ovbd_device *ovbd, sector_t sector, size_t n) 
 
 	struct page *page;
 	void *dst;
+	loff_t len;
 	unsigned int offset = (sector & (PAGE_SECTORS-1)) << SECTOR_SHIFT;
-	size_t copy;
+	printk("we will try offset at %d, sector %d, size %d", offset, sector, n);
 
-	copy = min_t(size_t, n, PAGE_SIZE - offset);
 	page = ovbd_lookup_page(ovbd, sector);
 	BUG_ON(!page);
 
+	dst = kmap_atomic(page);
+	decompress_to(ovbd, dst, offset, n, &len);
+	BUG_ON(len < 0);
+	kunmap_atomic(dst);
+/*
+	if ( < n) {
+		src += copy;
+		sector += copy >> SECTOR_SHIFT;
+		copy = n - copy;
+		page = brd_lookup_page(brd, sector);
+		BUG_ON(!page);
+
+		dst = kmap_atomic(page);
+		memcpy(dst, src, copy);
+		kunmap_atomic(dst);
+	} */
 	return true;
 }
 
@@ -364,7 +380,7 @@ static struct ovbd_device *ovbd_alloc(int i)
 	disk->fops		= &ovbd_fops;
 	disk->private_data	= ovbd;
 	disk->flags		= GENHD_FL_EXT_DEVT;
-	sprintf(disk->disk_name, "ram%d", i);
+	sprintf(disk->disk_name, "vbd%d", i);
 	set_capacity(disk, rd_size * 2);
 	ovbd->ovbd_queue->backing_dev_info->capabilities |= BDI_CAP_SYNCHRONOUS_IO;
 
@@ -404,6 +420,7 @@ static struct ovbd_device *ovbd_init_one(int i, bool *new)
 	if (ovbd) {
 		ovbd->ovbd_disk->queue = ovbd->ovbd_queue;
 		add_disk(ovbd->ovbd_disk);
+	        open_zfile(ovbd, backfile, true);
 		list_add_tail(&ovbd->ovbd_list, &ovbd_devices);
 	}
 	*new = true;
@@ -488,7 +505,6 @@ static int __init ovbd_init(void)
 	pr_info("ovbd: module loaded\n");
 	
 	struct ovbd_device* backed_ovbd = list_first_entry_or_null(&ovbd->ovbd_list, struct ovbd_device, ovbd_list);
-	open_zfile(backed_ovbd, backfile, true);
 
 	return 0;
 

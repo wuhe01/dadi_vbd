@@ -109,6 +109,43 @@ struct zfile_file {
         void* m_files[0];
 } __attribute__((packed));
 
+#define TYPE_SEGMENT         0
+#define TYPE_SEGMENT_MAPPING 1
+#define TYPE_FILDES          2
+#define TYPE_LSMT_RO_INDEX   3
+
+struct lsmt_ht {
+  uint64_t magic0;
+  struct _UUID magic1;
+  // offset 24, 28
+  uint32_t size;  //= sizeof(HeaderTrailer);
+  uint32_t flags; //= 0;
+  // offset 32, 40, 48
+  uint64_t index_offset; // in bytes
+  uint64_t index_size;   // # of SegmentMappings
+  uint64_t virtual_size; // in bytes
+} __attribute__((packed));
+
+
+struct segment {                             /* 8 bytes */
+        uint64_t offset : 50; // offset (0.5 PB if in sector)
+        uint32_t length : 14; // length (8MB if in sector)
+} /* __attribute__((packed)); */;
+
+struct segment_mapping {                             /* 8 + 8 bytes */
+        uint64_t offset : 50; // offset (0.5 PB if in sector)
+        uint32_t length : 14;
+        uint64_t moffset : 55; // mapped offset (2^64 B if in sector)
+        uint32_t zeroed : 1;   // indicating a zero-filled segment
+        uint8_t tag;
+};
+
+struct lsmt_ro_index {
+        const struct segment_mapping *pbegin;
+        const struct segment_mapping *pend;
+        struct segment_mapping mapping[0];
+};
+
 
 /*
  * Each block ovbd device has a radix_tree ovbd_pages of pages that stores
@@ -134,10 +171,19 @@ struct ovbd_device {
 	uint64_t partial_offset[ 200 ];
         uint16_t deltas[1<<16 - 1];
 	uint16_t block_size;
+	struct file* compressed_fp;
+ 	unsigned char* path;
 
 };
 
 // open a zfile layer
 bool open_zfile( struct ovbd_device *odev, const char* file,  bool ownership);
+bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t length, loff_t* len);
+bool load_lsmt( struct ovbd_device *odev, struct file* file, size_t filelen, bool ownership);
 
+/*struct file *file_open(const char *path, int flags, int rights)
+void  file_close(struct file *file)
+size_t get_file_size(struct file* path) ;
+size_t file_read(struct file *file, void *buf, size_t count, loff_t *pos);
+*/
 #endif

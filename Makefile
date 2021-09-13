@@ -2,7 +2,7 @@ CONFIG_MODULE_SIG=n
 
 MYPROC=vbd
 obj-m += vbd.o 
-vbd-objs := overlay_vbd.o zfile.o
+vbd-objs := overlay_vbd.o zfile.o lsmt.o
 
 export KROOT=/lib/modules/$(shell uname -r)/build
 #export KROOT=/mnt/linux-bcache

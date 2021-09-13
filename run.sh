@@ -1,0 +1,2 @@
+#sudo qemu-system-x86_64 -enable-kvm -nic user,hostfwd=tcp::2222-:22,smb=/mnt/linux_modules  -kernel arch/x86_64/boot/bzImage   -nographic   -append "console=ttyS0 root=/dev/sda nokaslr"   -initrd ramdisk.img   -m 512   --enable-kvm   -cpu host -drive file=qemu-image.img
+sudo qemu-system-x86_64 -enable-kvm -nic user,hostfwd=tcp::2222-:22,smb=/mnt/linux_modules  -kernel arch/x86_64/boot/bzImage   -nographic   -append "console=ttyS0 root=/dev/sda nokaslr"   -m 8192  -cpu host -drive file=qemu-image.img
