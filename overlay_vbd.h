@@ -171,6 +171,8 @@ struct ovbd_device {
 	uint64_t partial_offset[ 200 ];
         uint16_t deltas[1<<16 - 1];
 	uint16_t block_size;
+
+	size_t *jump_table;
 	struct file* compressed_fp;
  	unsigned char* path;
 	bool initialized ;

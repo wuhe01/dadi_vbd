@@ -184,7 +184,7 @@ static bool ovbd_fill_page(struct ovbd_device *ovbd, sector_t sector, size_t n) 
 
 	dst = kmap_atomic(page);
 	decompress_to(ovbd, dst, offset, n, &len);
-	BUG_ON(len < 0);
+	//BUG_ON(len < 0);
 	kunmap_atomic(dst);
 /*
 	if ( < n) {
