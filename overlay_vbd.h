@@ -173,6 +173,7 @@ struct ovbd_device {
 	uint16_t block_size;
 
 	size_t *jump_table;
+	size_t jt_size;
 	struct file* compressed_fp;
  	unsigned char* path;
 	bool initialized ;

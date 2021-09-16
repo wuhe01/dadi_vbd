@@ -72,14 +72,21 @@ int get_blocks_length( struct ovbd_device* odev, size_t begin, size_t end) {
 
 bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t length,  loff_t *dlen) {
    printk ("get decrompess length [%d - %d]", start, start + length );
+   size_t start_idx; 
    loff_t begin, range;
-   range = get_range(odev, start);
-   begin = start + ZF_SPACE;
+   start_idx = start / HT_SPACE ;
+   if ( start_idx >= 1 && odev->jump_table[start_idx] != 0 && start_idx < odev->jt_size ) {
+	begin = odev->jump_table[start_idx];
+	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
+   } else {
+//   range = get_range(odev, start);
 
-//range = end - start; 
-   
-   //end = begin + length;
-   
+   	begin = start + ZF_SPACE;
+	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
+   }
+
+   printk("now we get begin %u, range %u", start, range);
+
    if (odev->path == NULL) {
 	   printk("device not initiated yet");
 	   return false;
@@ -97,7 +104,7 @@ bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t le
 	   return false;
    }
   
-   printk("src_buf length %d, begin %d", length, begin);
+   printk("src_buf length %d, begin %d", range, begin);
    
    size_t ret = file_read(fp, src_buf, range, &begin);
    if (ret !=  range ) {
@@ -105,10 +112,15 @@ bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t le
 	   return false;
    }
    printk("loaded %d src data at offset [%d - %d]", ret, start, start + range); 
-
-   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, range, *dlen);
+   /*
+   int i = 0;
+   for (i = 0; i< 128; i+=4) {
+	printk("src_buf[%u]=%u", i, *((uint32_t*)(src_buf+i)));
+   }
+   */
+   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, range - 4, *dlen);
    *dlen = ret;
-   printk("Decompressed [%d]", ret);
+   printk("Decompressed [%d]", *dlen);
 
    kfree(src_buf);
    
@@ -166,11 +178,13 @@ bool build_jump_table(struct ovbd_device* odev, uint32_t *jt_saved, struct zfile
 
   uint16_t partial_size = 1;
   uint16_t deltas_size = 1;
-
+  odev->jump_table[0] = 0;
+  odev->jt_size = 1;
 
     for (i = 1; i < (size_t) n + 1 ; ++i) {
-          //PRINT_INFO(" jump_table[%d]:  %d", i, (uint32_t) (jt_saved[i-1]));
- //         odev->jump_table[i] = odev->jump_table[i-1] + jt_saved[i - 1];
+ //         printk(" jump_table[%u]:  %u", i, (uint32_t) (jt_saved[i-1]));
+          odev->jump_table[i] = odev->jump_table[i-1] + jt_saved[i - 1];
+	  odev->jt_size++;
 //	  printk("Load jump_table ...  [%d, %d]", odev->jump_table[i-1], odev->jump_table[i]);
 
           last_delta = 0;
@@ -189,8 +203,6 @@ bool build_jump_table(struct ovbd_device* odev, uint32_t *jt_saved, struct zfile
           }
           odev->deltas[deltas_size++] = odev->deltas[i-1] + jt_saved[i-1] - local_min;
           last_delta = last_delta + odev->deltas[i-1] - local_min;
-
-//          printk("delta %d, iterated %i", odev->deltas[i], i);
 
   }
   
@@ -251,6 +263,7 @@ bool open_zfile(struct ovbd_device* odev , const char* path, bool ownership) {
 
    odev->jump_table = kmalloc(jt_size, GFP_KERNEL);
    memset(odev->jump_table, 0, jt_size);
+   odev->jt_size = 0;
 
    build_jump_table(odev, jt_saved, zht);
 
