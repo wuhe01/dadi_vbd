@@ -156,7 +156,7 @@ static int ovbd_prepare_page(struct ovbd_device *ovbd, sector_t sector, size_t n
 	size_t copy;
 
 	copy = min_t(size_t, n, PAGE_SIZE - offset);
-	printk("prepare_page, sector %d , size %d", sector, n);
+	printk("prepare_page() sector %d , size %d", sector, n);
 	if (!ovbd_insert_page(ovbd, sector))
 		return -ENOSPC;
 	if (copy < n) {
@@ -177,7 +177,7 @@ static bool ovbd_fill_page(struct ovbd_device *ovbd, sector_t sector, size_t n) 
 		printk("zfile not ready yet");
 		return false;
 	}
-	printk("we will try offset at %d, sector %d, size %d", offset, sector, n);
+	//printk("ovbd_fill_page() try offset at %d, sector %d, size %d", offset, sector, n);
 
 	page = ovbd_lookup_page(ovbd, sector);
 	BUG_ON(!page);
@@ -211,6 +211,8 @@ static void copy_from_ovbd(void *dst, struct ovbd_device *ovbd,
 	void *src;
 	unsigned int offset = (sector & (PAGE_SECTORS-1)) << SECTOR_SHIFT;
 	size_t copy;
+
+	//printk("copy_from_ovbd() dst = %u, sector = %u, size = %u", dst, sector, n);
 
 	copy = min_t(size_t, n, PAGE_SIZE - offset);
 	page = ovbd_lookup_page(ovbd, sector);
@@ -254,6 +256,7 @@ static int ovbd_do_bvec(struct ovbd_device *ovbd, struct page *page,
 	}
 
 	mem = kmap_atomic(page);
+	//printk ("ovbd_do_bvec() mem + off = %u, sector = %u, len = %u", mem + off, sector, len);
 	copy_from_ovbd(mem + off, ovbd, sector, len);
 	flush_dcache_page(page);
 	kunmap_atomic(mem);
@@ -303,6 +306,8 @@ static int ovbd_rw_page(struct block_device *bdev, sector_t sector,
 
 	if (PageTransHuge(page))
 		return -ENOTSUPP;
+
+	printk("ovbd_rw_page () %u page %u op %u", sector, page, op);
 	err = ovbd_do_bvec(ovbd, page, PAGE_SIZE, 0, op, sector);
 	page_endio(page, op_is_write(op), err);
 	return err;
@@ -328,7 +333,7 @@ static int max_part = 1;
 module_param(max_part, int, 0444);
 MODULE_PARM_DESC(max_part, "Num Minors to reserve between devices");
 
-static char *backfile = "/test.c";
+static char *backfile = "/test.lsmtz";
 module_param(backfile,charp,0660);
 MODULE_PARM_DESC(backfile, "Back file for lsmtz");
 
