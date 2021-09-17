@@ -122,29 +122,57 @@ build_memory_index(const struct segment_mapping *pmappings, size_t n,
 };
 
 bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool ownership) {
-   unsigned int ret, i;
+   size_t ret, i;
    struct lsmt_ht* pht;
    struct lsmt_ro_index *pi = NULL;
    struct segment_mapping *p = NULL;
    struct segment_mapping *it = NULL;
-   unsigned char* header_tail; 
+   unsigned char* buffer; 
    loff_t pos = ZF_SPACE;
+   loff_t tailer_address = 0;
 
-   pht = kmalloc(HT_SPACE, GFP_KERNEL);
-   memset(pht, 0, HT_SPACE);
-   ret = kernel_read(fp, header_tail, HT_SPACE, &pos);
-   pht = (struct lsmt_ht*) header_tail;
+   printk("load_lsmt %u", filelen);
+   buffer = kmalloc(HT_SPACE, GFP_KERNEL);
+   memset(buffer, 0, HT_SPACE);
+   decompress_to(odev, buffer, 0, HT_SPACE, (loff_t*) &ret);
+   if (ret != HT_SPACE) {
+	   printk("error loading header %u", ret);
+	   return false;
+   }
+
+   //ret = kernel_read(fp, buffer, HT_SPACE, &pos);
+   pht = (struct lsmt_ht*) buffer;
    
+   printk("after read header: size = %u, flag = %u, index_size = %u, index_offset = %u, virtual_size = %u",
+		   pht->size, pht->flags, pht->index_size, pht->index_offset, pht->virtual_size);
    if ( ret < (ssize_t) HT_SPACE) {
        printk("failed to load header \n");
    } 
 
+   tailer_address = odev->jump_table[odev->jt_size -1];
+   printk("last offset is %u", odev->jump_table[odev->jt_size - 1]);
+
+   for (i = 0; i < odev->jt_size / 122; i++) {
+	   printk ( "jump_table[%u] = %u ", i,  odev->jump_table[i]);
+	   decompress_to(odev, buffer, HT_SPACE*i, HT_SPACE, (loff_t*) &ret);
+   }
+
+   decompress_to(odev, buffer, tailer_address, HT_SPACE, (loff_t*) &ret);
+   printk("after read tailer: size = %u, flag = %u, index_size = %u, index_offset = %u, virtual_size = %u",
+		   pht->size, pht->flags, pht->index_size, pht->index_offset, pht->virtual_size);
+
+
    size_t file_size = filelen;
    loff_t tailer_offset = file_size - HT_SPACE - ZF_SPACE;
    loff_t index_offset = pht->index_offset;
-   printk("index_offset %d", index_offset);
-   ret = kernel_read(fp, header_tail, HT_SPACE, &tailer_offset);
+   printk("load_lsmt: index_offset %u", index_offset);
+   ret = kernel_read(fp, buffer, HT_SPACE, &tailer_offset);
    
-   kfree(header_tail);
+   if ( ret < HT_SPACE) {
+      printk("loading file failed");
+      return false;
+   }
+
+   kfree(buffer);
    return true;
 }

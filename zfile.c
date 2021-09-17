@@ -71,12 +71,12 @@ int get_blocks_length( struct ovbd_device* odev, size_t begin, size_t end) {
 }
 
 bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t length,  loff_t *dlen) {
-   printk ("get decrompess length [%d - %d]", start, start + length );
+   //printk ("try decompress with [%d - %d]", start, start + length );
    size_t start_idx; 
    loff_t begin, range;
    start_idx = start / HT_SPACE ;
    if ( start_idx >= 1 && odev->jump_table[start_idx] != 0 && start_idx < odev->jt_size ) {
-	begin = odev->jump_table[start_idx];
+	begin = odev->jump_table[start_idx] + ZF_SPACE;
 	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
    } else {
 //   range = get_range(odev, start);
@@ -85,7 +85,7 @@ bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t le
 	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
    }
 
-   printk("now we get begin %u, range %u", start, range);
+   //printk("now we get begin = %u, range %u", begin, range);
 
    if (odev->path == NULL) {
 	   printk("device not initiated yet");
@@ -95,8 +95,8 @@ bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t le
    }
 
    unsigned char *src_buf; 
-   src_buf = kmalloc(range,  GFP_KERNEL);
-   memset(src_buf, 0, range);
+   src_buf = kmalloc(range + 2,  GFP_KERNEL);
+   memset(src_buf, 0, range + 2);
 
    struct file* fp = file_open( odev->path, 0, 644);
    if (!fp) {
@@ -104,21 +104,22 @@ bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t le
 	   return false;
    }
   
-   printk("src_buf length %d, begin %d", range, begin);
+   printk("src_buf range {%u - %u}", begin , begin + range );
    
    size_t ret = file_read(fp, src_buf, range, &begin);
-   if (ret !=  range ) {
+   if (ret !=  (range)) {
 	   printk( "Did read enough data, something may be wrong %d", ret);
 	   return false;
    }
-   printk("loaded %d src data at offset [%d - %d]", ret, start, start + range); 
+   //printk("loaded %d src data at offset [%d - %d]", ret, start, start + range); 
+   
    /*
    int i = 0;
    for (i = 0; i< 128; i+=4) {
 	printk("src_buf[%u]=%u", i, *((uint32_t*)(src_buf+i)));
-   }
-   */
-   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, range - 4, *dlen);
+   }*/
+   
+   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, range - 4 , length);
    *dlen = ret;
    printk("Decompressed [%d]", *dlen);
 
@@ -190,7 +191,7 @@ bool build_jump_table(struct ovbd_device* odev, uint32_t *jt_saved, struct zfile
           last_delta = 0;
           if (( i % part_size) == 0 ) {
                   local_min = 1<<16 - 1;
-                  printk(" local_min  %d", local_min);
+                  //printk(" local_min  %d", local_min);
 		  size_t j ;
                   for (j = i; j < min( (size_t)(n + 1), (size_t)(i + part_size) ); j ++ )
                           local_min = min( (uint16_t)jt_saved[j - 1], (uint16_t)local_min);
@@ -240,16 +241,17 @@ bool open_zfile(struct ovbd_device* odev , const char* path, bool ownership) {
    odev->path = kmalloc( strlen(path), GFP_KERNEL);
    memset(odev->path, 0, strlen(path));
    strncpy( odev->path, path, strlen(path));
-   printk("opened zfile as %d", fp);
    
 
    size_t file_size = get_file_size(path);
+   odev->file_size = file_size;
    loff_t tailer_offset = file_size - ZF_SPACE;
    ret = file_read(fp, header_tail, ZF_SPACE, &tailer_offset);
    odev->block_size = zht->opt.block_size;
 
+   printk("zfile size is %u", file_size);
    jt_size = ((uint64_t)zht->index_size) * sizeof(uint32_t) ;
-   printk ("get index_size %d, index_offset %d", jt_size, zht->index_offset);
+//   printk ("get index_size %d, index_offset %d", jt_size, zht->index_offset);
 
    jt_saved = kmalloc(jt_size, GFP_KERNEL);
    memset(jt_saved, 0, jt_size);
@@ -267,7 +269,10 @@ bool open_zfile(struct ovbd_device* odev , const char* path, bool ownership) {
 
    build_jump_table(odev, jt_saved, zht);
 
-   //load_lsmt(odev, fp, file_size, ownership);
+   /*for (i = 0 ; i < odev->jt_size ; i ++) {
+	   printk ("jump_table[%u] = %u", i, odev->jump_table[i]);
+   } */
+   load_lsmt(odev, fp, file_size, ownership);
    
    odev->initialized = true;
    kfree(header_tail);
