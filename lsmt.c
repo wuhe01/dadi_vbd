@@ -130,6 +130,7 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool 
    unsigned char* buffer; 
    loff_t pos = ZF_SPACE;
    loff_t tailer_address = 0;
+   loff_t length = 0;
 
    printk("load_lsmt %u", filelen);
    buffer = kmalloc(HT_SPACE, GFP_KERNEL);
@@ -149,15 +150,16 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool 
        printk("failed to load header \n");
    } 
 
-   tailer_address = odev->jump_table[odev->jt_size -1];
+   tailer_address = odev->jump_table[odev->jt_size - 2];
+   length = odev->jump_table[odev->jt_size - 1] - odev->jump_table[odev->jt_size - 2];
    printk("last offset is %u", odev->jump_table[odev->jt_size - 1]);
-
-   for (i = 0; i < odev->jt_size / 122; i++) {
+/*
+   for (i = 0; i < odev->jt_size ; i++) {
 	   printk ( "jump_table[%u] = %u ", i,  odev->jump_table[i]);
-	   decompress_to(odev, buffer, HT_SPACE*i, HT_SPACE, (loff_t*) &ret);
+//	   decompress_to(odev, buffer, HT_SPACE*i, HT_SPACE, (loff_t*) &ret);
    }
-
-   decompress_to(odev, buffer, tailer_address, HT_SPACE, (loff_t*) &ret);
+*/
+   decompress_range(odev, buffer, tailer_address, length, (loff_t*) &ret);
    printk("after read tailer: size = %u, flag = %u, index_size = %u, index_offset = %u, virtual_size = %u",
 		   pht->size, pht->flags, pht->index_size, pht->index_offset, pht->virtual_size);
 

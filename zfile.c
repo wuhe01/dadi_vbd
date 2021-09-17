@@ -71,7 +71,7 @@ int get_blocks_length( struct ovbd_device* odev, size_t begin, size_t end) {
 }
 
 bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t length,  loff_t *dlen) {
-   //printk ("try decompress with [%d - %d]", start, start + length );
+   printk ("try decompress with [%d - %d]", start, start + length );
    size_t start_idx; 
    loff_t begin, range;
    start_idx = start / HT_SPACE ;
@@ -104,7 +104,7 @@ bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t le
 	   return false;
    }
   
-   printk("src_buf range {%u - %u}", begin , begin + range );
+   //printk("src_buf range {%u - %u}", begin , begin + range );
    
    size_t ret = file_read(fp, src_buf, range, &begin);
    if (ret !=  (range)) {
@@ -127,6 +127,57 @@ bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t le
    
    return true;
 }
+
+bool decompress_range( struct ovbd_device *odev, void* dst, loff_t start, loff_t length,  loff_t *dlen) {
+   printk ("try decompress with [%d - %d]", start, start + length );
+   if (start > odev->jump_table[odev->jt_size - 1] || length < 0 ) {
+	   printk("Can't be right, start %u length %d request denied.", start, length);
+	   return false;
+   }
+
+   //printk("now we get begin = %u, range %u", begin, range);
+
+   if (odev->path == NULL) {
+	   printk("device not initiated yet");
+	   return false;
+   } else {
+	   printk("Using file (%s) as backend", odev->path);
+   }
+
+   unsigned char *src_buf; 
+   src_buf = kmalloc(length + 2,  GFP_KERNEL);
+   memset(src_buf, 0,  + 2);
+
+   struct file* fp = file_open( odev->path, 0, 644);
+   if (!fp) {
+	   printk("Canot open zfile %s\n", odev->path);
+	   return false;
+   }
+  
+   //printk("src_buf range {%u - %u}", begin , begin + range );
+   
+   loff_t begin = start;
+   size_t ret = file_read(fp, src_buf, length, &begin);
+   if (ret !=  (length)) {
+	   printk( "Did read enough data, something may be wrong %d", ret);
+	   return false;
+   }
+   //printk("loaded %d src data at offset [%d - %d]", ret, start, start + range); 
+   
+   int i = 0;
+   for (i = 0; i< 24 ; i+=4) {
+	printk("src_buf[%u]=%u", i, (uint32_t) *(src_buf+i));
+   }
+   
+   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, 20 , 2560);
+   *dlen = ret;
+   printk("Decompressed [%d]", *dlen);
+
+   kfree(src_buf);
+   
+   return true;
+}
+
 
 bool test_decompress(struct ovbd_device* odev, size_t partial_size, size_t deltas_size) {
   size_t i, j;
@@ -241,7 +292,6 @@ bool open_zfile(struct ovbd_device* odev , const char* path, bool ownership) {
    odev->path = kmalloc( strlen(path), GFP_KERNEL);
    memset(odev->path, 0, strlen(path));
    strncpy( odev->path, path, strlen(path));
-   
 
    size_t file_size = get_file_size(path);
    odev->file_size = file_size;
