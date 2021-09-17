@@ -1,256 +1,249 @@
-#include <linux/fs.h>
 #include <asm/segment.h>
+#include <linux/fs.h>
 //#include <asm/uaccess.h>
 #include <linux/buffer_head.h>
-#include <linux/slab.h>
 #include <linux/lz4.h>
-#include "overlay_vbd.h"
+#include <linux/slab.h>
+#include <linux/vmalloc.h>
 
+#include "lsmt.h"
+#include "zfile.h"
 
-static uint64_t segment_end(const void /* const struct segment */ *m) {
-  const struct segment *s = (const struct segment *)m;
-  return s->offset + s->length;
+static const uint64_t INVALID_OFFSET = (1UL << 50) - 1;
+static const uint32_t HT_SPACE = 4096;
+static uint64_t *MAGIC0 = (uint64_t *)"LSMT\0\1\2";
+static const uuid_t MAGIC1 = UUID_INIT(0x657e63d2, 0x9444, 0x084c, 0xa2, 0xd2,
+                                       0xc8, 0xec, 0x4f, 0xcf, 0xae, 0x8a);
+
+static uint64_t segment_end(const struct segment_mapping *s) {
+    return s->offset + s->length;
 }
 
+void forward_offset_to(struct segment_mapping *s, uint64_t x) {
+    uint64_t delta = x - s->offset;
+    s->offset = x;
+    s->length -= delta;
+    s->moffset += s->zeroed ? 0 : delta;
+}
 
-void forward_offset_to(void *m, uint64_t x, int8_t type) {
-  struct segment *s = (struct segment *)m;
-  ASSERT(x >= s->offset);
-  uint64_t delta = x - s->offset;
-  s->offset = x;
-  s->length -= delta;
-  if (type == TYPE_SEGMENT_MAPPING) {
-    struct segment_mapping *tmp = (struct segment_mapping *)m;
-    if (!tmp->zeroed) {
-      tmp->moffset += delta;
+void backward_end_to(struct segment_mapping *s, uint64_t x) {
+    s->length = x - s->offset;
+}
+
+static void trim_edge(struct segment_mapping *pm, size_t m,
+                      const struct segment_mapping *s) {
+    struct segment_mapping *back;
+    if (m == 0) return;
+    if (pm[0].offset < s->offset) forward_offset_to(&pm[0], s->offset);
+
+    // back may be pm[0], when m == 1
+    back = &pm[m - 1];
+    if (segment_end(back) > segment_end(s))
+        backward_end_to(back, segment_end(s));
+}
+
+const struct segment_mapping *ro_index_lower_bound(
+    const struct lsmt_ro_index *index, uint64_t offset) {
+    const struct segment_mapping *l = index->pbegin;
+    const struct segment_mapping *r = index->pend - 1;
+    const struct segment_mapping *pret;
+    int ret = -1;
+    while (l <= r) {
+        int m = ((l - index->pbegin) + (r - index->pbegin)) >> 1;
+        const struct segment_mapping *cmp = index->pbegin + m;
+        if (offset >= segment_end(cmp)) {
+            ret = m;
+            l = index->pbegin + (m + 1);
+        } else {
+            r = index->pbegin + (m - 1);
+        }
     }
-  }
-}
-
-void backward_end_to(void *m, uint64_t x) {
-  struct segment *s = (struct segment *)m;
-  if (x <= s->offset) {
-    printk("%lu > %lu is FALSE", x, s->offset);
-  }
-
-  s->length = x - s->offset;
-}
-
-static void trim_edge(void *m, const struct segment *bound_segment,
-                      uint8_t type) {
-  if (((struct segment *)m)->offset < bound_segment->offset) {
-    forward_offset_to(m, bound_segment->offset, type);
-  }
-  if (segment_end(m) > segment_end(bound_segment)) {
-    backward_end_to(m, segment_end(bound_segment));
-  }
-}
-
-const struct segment_mapping *
-ro_index_lower_bound(const struct lsmt_ro_index *index, uint64_t offset) {
-  const struct segment_mapping *l = index->pbegin;
-  const struct segment_mapping *r = index->pend - 1;
-  int ret = -1;
-  while (l <= r) {
-    int m = ((l - index->pbegin) + (r - index->pbegin)) >> 1;
-    const struct segment_mapping *cmp = index->pbegin + m;
-    if (offset >= segment_end(cmp)) {
-      ret = m;
-      l = index->pbegin + (m + 1);
+    pret = index->pbegin + (ret + 1);
+    if (pret >= index->pend) {
+        return index->pend;
     } else {
-      r = index->pbegin + (m - 1);
+        return pret;
     }
-  }
-  const struct segment_mapping *pret = index->pbegin + (ret + 1);
-  if (pret >= index->pend) {
-    return index->pend;
-  } else {
-    return pret;
-  }
 }
 
 int ro_index_lookup(const struct lsmt_ro_index *index,
-                    const struct segment *query_segment,
+                    const struct segment_mapping *query_segment,
                     struct segment_mapping *ret_mappings, size_t n) {
-  if (query_segment->length == 0)
-    return 0;
-  const struct segment_mapping *lb =
-      ro_index_lower_bound(index, query_segment->offset);
-  int cnt = 0;
-  const struct segment_mapping *it = lb;
-  for (; it != index->pend; it++) {
-    if (it->offset >= segment_end(query_segment))
-      break;
-    ret_mappings[cnt++] = *it;
-    if (cnt == n)
-      break;
-  }
-  if (cnt == 0)
-    return 0;
-  trim_edge(&ret_mappings[0], query_segment, TYPE_SEGMENT_MAPPING);
-  if (cnt > 1) {
-    trim_edge(&ret_mappings[cnt - 1], query_segment, TYPE_SEGMENT_MAPPING);
-  }
-  return cnt;
+    int cnt = 0;
+    const struct segment_mapping *lb;
+    const struct segment_mapping *it;
+
+    if (query_segment->length == 0) return 0;
+    lb = ro_index_lower_bound(index, query_segment->offset);
+    for (it = lb; it != index->pend; it++) {
+        if (it->offset >= segment_end(query_segment)) break;
+        ret_mappings[cnt++] = *it;
+        if (cnt == n) break;
+    }
+    if (cnt == 0) return 0;
+    trim_edge(ret_mappings, cnt, query_segment);
+    return cnt;
 }
 
 size_t ro_index_size(const struct lsmt_ro_index *index) {
-  return index->pend - index->pbegin;
+    return index->pend - index->pbegin;
 }
 
-struct lsmt_ro_index *
-build_memory_index(const struct segment_mapping *pmappings, size_t n,
-                    uint64_t moffset_begin, uint64_t moffset_end, bool copy) {
-  printk("building_memory_index");
-  struct lsmt_ro_index *ret = NULL;
-    int index_size = sizeof(struct lsmt_ro_index);
-    if (copy) {
-      index_size += sizeof(struct lsmt_ro_index) * n;
+struct lsmt_file *lsmt_open(struct zfile *fp) {
+    unsigned int ret;
+    struct segment_mapping *p = NULL;
+    struct lsmt_file *lf = NULL;
+    uint64_t cnt = 0;
+    uint64_t idx = 0;
+    size_t file_size = 0;
+    loff_t tailer_offset;
+    ssize_t index_bytes;
+
+    if (!fp) {
+        pr_info("LSMT: failed to open zfile\n");
+        return NULL;
     }
-    ret = (struct lsmt_ro_index *)kmalloc(index_size, GFP_KERNEL);
-    if (!ret) {
-      return NULL;
+
+    if (!is_lsmtfile(fp)) {
+        pr_info("LSMT: fp is not a lsmtfile\n");
+        return NULL;
     }
-    if (!copy) {
-      ret->pbegin = pmappings;
-      ret->pend = pmappings + n;
-    } else {
-      memcpy(ret->mapping, pmappings, n * sizeof(struct segment_mapping));
-      ret->pbegin = ret->mapping;
-      ret->pend = ret->mapping + n;
+
+    lf = kzalloc(sizeof(struct lsmt_file), GFP_KERNEL);
+    lf->fp = fp;
+
+    file_size = zfile_len(fp);
+    tailer_offset = file_size - HT_SPACE;
+    pr_info("LSMT: read tailer\n");
+    ret = zfile_read(fp, &lf->ht, sizeof(struct lsmt_ht), tailer_offset);
+    if (ret < (ssize_t)sizeof(struct lsmt_ht)) {
+        printk("failed to load tailer \n");
+        return NULL;
     }
-    printk("build_memory_index %d", ret->mapping);
+    pr_info("LSMT: index off: %lld cnt: %lld\n", lf->ht.index_offset,
+            lf->ht.index_size);
 
-  return NULL;
-};
-
-bool read_index(struct ovbd_device* odev, size_t index_offset, size_t index_size) {
-   struct segment_mapping *indexes;
-   struct segment_mapping *one ;
-   size_t ret, i;
-   size_t dst_size;
-   dst_size = sizeof(struct segment_mapping) * index_size;
-   printk("dst size %u", sizeof(struct segment_mapping));
-   printk("reading index %u, decompress_size %u", index_size, dst_size);
-   indexes = decompress_by_addr(odev, index_offset, dst_size);
-  
-   if (indexes == NULL) {
-	   printk("Can not decompress address %x", index_offset);
-	   return false;
-   }
-
-   
-   for (i = 0; i < 180; i++) {
-   ///   printk("get uint64_t buffer[%u] = %lu", i, *( (uint64_t*) (indexes + i)) );
-      printk("offset[%u] = %lu, length %u ", i, indexes[i].offset, indexes[i].length);
-      printk("moffset[%u] = %lu, zeroed = %u, tag = %u", i, indexes[i].moffset, indexes[i].zeroed, indexes[i].tag);
-   }
-/*
-   printk ("before decompress");
-   one = kmalloc( HT_SPACE, GFP_KERNEL);
-   memset(one, 0, HT_SPACE);
-   decompress_one_page(odev, one, index_offset);
-   printk ("after");
-
-   for (i = 0; i < 100; i++) {
-      printk("get uint64_t buffer[%u] = %lu", i, *( (uint64_t*) (one + i)) );
-      printk("offset[%u] = %lu, length %u ", i, one[i].offset, one[i].length);
-      printk("moffset[%u] = %u, zeroed = %u, tag = %u", i, one[i].moffset, one[i].zeroed, one[i].tag);
-      //printk("moffset[%u] = %lu, zeroed = %u, tag = %u", i, (one+i)->moffset, (one+i)->zeroed, (one+i)->tag);
-   }
-*/
-   build_memory_index(one, 100, 0, 2000, false);
-   kfree(indexes);
-   return true;
+    index_bytes = lf->ht.index_size * sizeof(struct segment_mapping);
+    pr_info("LSMT: off: %lld, bytes: %ld\n", lf->ht.index_offset, index_bytes);
+    if (index_bytes == 0 || index_bytes > 1024UL * 1024 * 1024) return NULL;
+    p = vmalloc(index_bytes);
+    pr_info("LSMT: loadindex off: %lld cnt: %ld\n", lf->ht.index_offset,
+            index_bytes);
+    ret = zfile_read(fp, p, index_bytes, lf->ht.index_offset);
+    pr_info("LSMT: load index ret=%d\n", ret);
+    if (ret < index_bytes) {
+        printk("failed to read index\n");
+        vfree(p);
+        return NULL;
+    }
+    for (idx = 0; idx < lf->ht.index_size; idx++) {
+        if (p[idx].offset != INVALID_OFFSET) {
+            p[cnt] = p[idx];
+            p[cnt].tag = 0;
+            cnt++;
+        }
+    }
+    lf->ht.index_size = cnt;
+    lf->index.mapping = p;
+    lf->index.pbegin = p;
+    lf->index.pend = p + cnt;
+    return lf;
 }
 
-bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t decompressed_size, bool ownership) {
-   size_t ret, i;
-   struct lsmt_ht* pht;
-   struct lsmt_ro_index *pi = NULL;
-   struct segment_mapping *p = NULL;
-   struct segment_mapping *it = NULL;
-   unsigned char* buffer; 
-   loff_t pos = ZF_SPACE;
-   loff_t tailer_jp = 0;
-   loff_t length = 0;
-   loff_t remain = 0;
-
-   printk("load_lsmt decompressed_size %u", decompressed_size);
-   buffer = kmalloc(HT_SPACE, GFP_KERNEL);
-   memset(buffer, 0, HT_SPACE);
-
-   ret = decompress_one_page(odev, buffer, 0 );
-   if (!ret) {
-	   printk("error loading header %u", ret);
-	   return false;
-   }
-
-   //ret = kernel_read(fp, buffer, HT_SPACE, &pos);
-   pht = (struct lsmt_ht*) buffer;
-   
-   printk("after read header: size = %u, flag = %u, index_size = %u, index_offset = %u, virtual_size = %u",
-		   pht->size, pht->flags, pht->index_size, pht->index_offset, pht->virtual_size);
-
-   if ( decompressed_size % HT_SPACE) {
-       remain = decompressed_size % HT_SPACE;
-       printk("load_lsmt: decompressed_size = %lu, remain = %lu", decompressed_size, remain);
-       tailer_jp = odev->jt_size - 3;
-   } else {
-       remain = 0;
-       tailer_jp = odev->jt_size - 2;
-   }
-
-   printk("tailer_jp = %u", tailer_jp);
-   
-/*   printk("last offset is %u", odev->jump_table[odev->jt_size - 1]);
-
-   for (i = 0; i < odev->jt_size ; i++) {
-	   printk ( "jump_table[%u] = %u ", i,  odev->jump_table[i]);
-//	   decompress_to(odev, buffer, HT_SPACE*i, HT_SPACE, (loff_t*) &ret);
-   }
-*/
-   ret = decompress_by_jp(odev, buffer, tailer_jp);
-   if (!ret) {
-	   printk("decompress tailer failed");
-	   return false;
-   }
-   
-   pht = (struct lsmt_ht*) (buffer + remain );
-   //uint64_t *tmp = (uint64_t *) (buffer + remain );
-   //uint32_t *tmp2 = (uint32_t *) (buffer + remain );
-
-   //printk("offset + remain %lu = %lu", remain, tmp );
-   printk("after read tailer: size = %lu, flag = %u, index_size = %u, index_offset = %lu, virtual_size = %lu",
-		   pht->size, pht->flags, pht->index_size, pht->index_offset, pht->virtual_size);
-
-   size_t trailer_offset = decompressed_size - HT_SPACE;
-   size_t index_bytes = pht->index_size * sizeof(struct segment_mapping);
-   printk("trailer_offset = %u, index_bytes = %u", trailer_offset, index_bytes);
-   read_index(odev, pht->index_offset, pht->index_size);
-   /*
-   for (i = 0; i < 16; i++) {
-	printk("get uint64_t buffer[%u] = %lu", i, *( (uint64_t*) (tmp + i)) );
-   }
-   printk("now 32 bit ");*/
-   printk("..................................................................");
- /*  
-   for (i = 0; i < odev->jt_size -1 ; i++) {
-	decompress_one_page(odev, buffer, odev->jump_table[i]);
-	int j ;
-	for (j = 0; j < 20; j++) {
-	     printk("jt[%u] start %lu buffer[%lu] = %lu", i, buffer + j*8, j, *( (uint64_t*) (buffer + j*8)) );
-	}
-   }
-*/
-  /* size_t file_size = filelen;
-   loff_t tailer_offset = file_size - HT_SPACE - ZF_SPACE;
-   loff_t index_offset = pht->index_offset;
-   printk("load_lsmt: index_offset %u", index_offset);
-   ret = kernel_read(fp, buffer, HT_SPACE, &tailer_offset);
-   */
-
-   kfree(buffer);
-   return true;
+void lsmt_close(struct lsmt_file *fp) {
+    // TODO: dealloc
+    zfile_close(fp->fp);
+    vfree(fp->index.mapping);
+    kfree(fp);
 }
 
+struct path lsmt_getpath(struct lsmt_file *file) {
+    return zfile_getpath(file->fp);
+}
+
+struct file *lsmt_getfile(struct lsmt_file *file) {
+    return zfile_getfile(file->fp);
+}
+static bool is_aligned(uint64_t val) { return 0 == (val & 0x1FFUL); }
+
+ssize_t lsmt_read(struct lsmt_file *fp, void *buf, size_t count,
+                  loff_t offset) {
+    // TODO: read from underlay
+    struct segment_mapping s;
+    struct segment_mapping *m;
+    ssize_t ret = 0;
+    size_t i = 0;
+    if (!is_aligned(offset | count)) {
+        pr_info("LSMT: %lld %lu not aligned\n", offset, count);
+        return -EINVAL;
+    }
+    if (offset > fp->ht.virtual_size) {
+        pr_info("LSMT: %lld over tail\n", offset);
+        return 0;
+    }
+    if (offset + count > fp->ht.virtual_size) {
+        pr_info("LSMT: %lld %lu over tail\n", offset, count);
+        count = fp->ht.virtual_size - offset;
+    }
+    m = kmalloc(16 * sizeof(struct segment_mapping), GFP_KERNEL);
+    s.offset = offset / SECTOR_SIZE;
+    s.length = count / SECTOR_SIZE;
+    while (true) {
+        int n = ro_index_lookup(&fp->index, &s, m, 16);
+        for (i = 0; i < n; ++i) {
+            if (s.offset < m[i].offset) {
+                // hole
+                memset(buf, 0, (m->offset - s.offset) * SECTOR_SIZE);
+                offset += (m[i].offset - s.offset) * SECTOR_SIZE;
+                buf += (m[i].offset - s.offset) * SECTOR_SIZE;
+                ret += (m[i].offset - s.offset) * SECTOR_SIZE;
+            }
+            // zeroe block
+            if (m[i].zeroed) {
+                memset(buf, 0, m->length * SECTOR_SIZE);
+                offset += m[i].length * SECTOR_SIZE;
+                buf += m[i].length * SECTOR_SIZE;
+                ret += m[i].length * SECTOR_SIZE;
+            } else {
+                ssize_t dc = zfile_read(fp->fp, buf, m->length * SECTOR_SIZE,
+                                        m->moffset * SECTOR_SIZE);
+                if (dc <= 0) {
+                    pr_info("LSMT: read failed ret=%ld\n", dc);
+                    goto out;
+                }
+                offset += m[i].length * SECTOR_SIZE;
+                buf += m[i].length * SECTOR_SIZE;
+                ret += m[i].length * SECTOR_SIZE;
+            }
+            forward_offset_to(&s, segment_end(&(m[i])));
+        }
+        if (n < 16) break;
+    }
+    if (s.length > 0) {
+        memset(buf, 0, s.length * SECTOR_SIZE);
+        offset += s.length * SECTOR_SIZE;
+        ret += s.length * SECTOR_SIZE;
+        buf += s.length * SECTOR_SIZE;
+    }
+out:
+    kfree(m);
+    return ret;
+}
+
+size_t lsmt_len(struct lsmt_file *fp) { return fp->ht.virtual_size; }
+
+bool is_lsmtfile(struct zfile *fp) {
+    struct lsmt_ht ht;
+    ssize_t ret;
+    if (!fp) return false;
+
+    pr_info("LSMT: read header\n");
+    ret = zfile_read(fp, &ht, sizeof(struct lsmt_ht), 0);
+
+    if (ret < (ssize_t)sizeof(struct lsmt_ht)) {
+        printk("failed to load header \n");
+        return NULL;
+    }
+
+    return ht.magic0 == *MAGIC0 && uuid_equal(&ht.magic1, &MAGIC1);
+}
