@@ -90,7 +90,6 @@ struct zfile_ht {
   uint8_t pad[4];
 }  __packed; 
 
-
 struct jump_table {
    uint64_t partial_offset; // 48 bits logical offset + 16 bits partial minimum
    uint16_t delta;
@@ -107,7 +106,7 @@ struct zfile_file {
         size_t m_files_count;
         size_t MAX_IO_SIZE;
         void* m_files[0];
-} __attribute__((packed));
+} __packed;
 
 #define TYPE_SEGMENT         0
 #define TYPE_SEGMENT_MAPPING 1
@@ -176,6 +175,7 @@ struct ovbd_device {
 	size_t jt_size;
 	struct file* compressed_fp;
  	unsigned char* path;
+	size_t file_size;
 	bool initialized ;
 
 };
@@ -183,6 +183,7 @@ struct ovbd_device {
 // open a zfile layer
 bool open_zfile( struct ovbd_device *odev, const char* file,  bool ownership);
 bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t length, loff_t* len);
+bool decompress_range( struct ovbd_device *odev, void* dst, loff_t start, loff_t length, loff_t* len);
 bool load_lsmt( struct ovbd_device *odev, struct file* file, size_t filelen, bool ownership);
 
 /*struct file *file_open(const char *path, int flags, int rights)

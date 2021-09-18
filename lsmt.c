@@ -150,8 +150,9 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool 
        printk("failed to load header \n");
    } 
 
-   tailer_address = odev->jump_table[odev->jt_size - 2];
-   length = odev->jump_table[odev->jt_size - 1] - odev->jump_table[odev->jt_size - 2];
+   tailer_address = odev->jump_table[odev->jt_size - 3];
+   length = odev->jump_table[odev->jt_size - 2] - odev->jump_table[odev->jt_size - 3];
+   
    printk("last offset is %u", odev->jump_table[odev->jt_size - 1]);
 /*
    for (i = 0; i < odev->jt_size ; i++) {

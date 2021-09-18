@@ -146,7 +146,7 @@ bool decompress_range( struct ovbd_device *odev, void* dst, loff_t start, loff_t
 
    unsigned char *src_buf; 
    src_buf = kmalloc(length + 2,  GFP_KERNEL);
-   memset(src_buf, 0,  + 2);
+   memset(src_buf, 0,  length + 2);
 
    struct file* fp = file_open( odev->path, 0, 644);
    if (!fp) {
@@ -156,7 +156,7 @@ bool decompress_range( struct ovbd_device *odev, void* dst, loff_t start, loff_t
   
    //printk("src_buf range {%u - %u}", begin , begin + range );
    
-   loff_t begin = start;
+   loff_t begin = start + ZF_SPACE;
    size_t ret = file_read(fp, src_buf, length, &begin);
    if (ret !=  (length)) {
 	   printk( "Did read enough data, something may be wrong %d", ret);
@@ -164,12 +164,7 @@ bool decompress_range( struct ovbd_device *odev, void* dst, loff_t start, loff_t
    }
    //printk("loaded %d src data at offset [%d - %d]", ret, start, start + range); 
    
-   int i = 0;
-   for (i = 0; i< 24 ; i+=4) {
-	printk("src_buf[%u]=%u", i, (uint32_t) *(src_buf+i));
-   }
-   
-   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, 20 , 2560);
+   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, length - 4 , HT_SPACE);
    *dlen = ret;
    printk("Decompressed [%d]", *dlen);
 
