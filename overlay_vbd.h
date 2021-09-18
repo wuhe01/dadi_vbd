@@ -95,19 +95,6 @@ struct jump_table {
    uint16_t delta;
 };
 
-struct zfile_file {
-        struct zfile_ro_index *m_index;
-	bool is_header;
-	bool is_sealed;
-	bool is_data_file;
-	struct zfile_ht m_ht;
-	uint64_t m_vsize;
-        bool m_ownership;       
-        size_t m_files_count;
-        size_t MAX_IO_SIZE;
-        void* m_files[0];
-} __packed;
-
 #define TYPE_SEGMENT         0
 #define TYPE_SEGMENT_MAPPING 1
 #define TYPE_FILDES          2
@@ -115,15 +102,16 @@ struct zfile_file {
 
 struct lsmt_ht {
   uint64_t magic0;
-  struct _UUID magic1;
+  uuid_t magic1;
   // offset 24, 28
   uint32_t size;  //= sizeof(HeaderTrailer);
   uint32_t flags; //= 0;
+  uint64_t padding;
   // offset 32, 40, 48
   uint64_t index_offset; // in bytes
   uint64_t index_size;   // # of SegmentMappings
   uint64_t virtual_size; // in bytes
-} __attribute__((packed));
+} __packed;
 
 
 struct segment {                             /* 8 bytes */

@@ -161,8 +161,17 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool 
    }
 */
    decompress_range(odev, buffer, tailer_address, length, (loff_t*) &ret);
+   pht = (struct lsmt_ht*) buffer + (HT_SPACE + odev->jump_table[odev->jt_size - 1] - odev->jump_table[odev->jt_size - 2]);
+
    printk("after read tailer: size = %u, flag = %u, index_size = %u, index_offset = %u, virtual_size = %u",
 		   pht->size, pht->flags, pht->index_size, pht->index_offset, pht->virtual_size);
+
+   for (i = 0; i < 20; i++) {
+	printk("get uint64_t buffer[%u] = %llu", i, *( (uint64_t*) (buffer + i*8)) );
+   }
+   for (i = 0; i < 40; i++) {
+	printk("get uint32_t buffer[%u] = %u", i, *( (uint32_t*) (buffer + i*4)) );
+   }
 
 
    size_t file_size = filelen;
