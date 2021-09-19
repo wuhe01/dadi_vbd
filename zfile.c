@@ -157,7 +157,7 @@ bool decompress_by_jp( struct ovbd_device *odev, void* dst, loff_t jump_start, l
 	   return false;
    }
    
-   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, length - 4 , HT_SPACE);
+   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, length, );
    *dlen = ret;
    printk("Decompressed [%d]", *dlen);
 
@@ -317,9 +317,9 @@ bool open_zfile(struct ovbd_device* odev , const char* path, bool ownership) {
 
    loff_t index_offset = zht->index_offset;
    ret = file_read(fp, jt_saved, jt_size, &index_offset);
-   for (i =0 ; i < 4; i++) 
+/*   for (i =0 ; i < 4; i++) 
 	   printk("jt_saved[%d] = %d", i, jt_saved[i]);
-
+*/
    odev->jump_table = kmalloc(jt_size, GFP_KERNEL);
    memset(odev->jump_table, 0, jt_size);
    odev->jt_size = 0;
@@ -335,6 +335,4 @@ bool open_zfile(struct ovbd_device* odev , const char* path, bool ownership) {
    kfree(header_tail);
    return true;
 }
-
-
 

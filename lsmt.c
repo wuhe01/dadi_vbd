@@ -129,7 +129,7 @@ bool read_index(struct ovbd_device* odev, size_t index_offset, size_t index_size
    memset(indexes, 0, sizeof(struct segment_mapping) * index_size);
    decompress_by_addr(odev, indexes, index_offset, index_size, (loff_t*)&ret);
    for (i = 0; i < 100; i++) {
-	   printk("readed result[%u] = %lu", i, indexes[i]);
+      printk("readed result[%u] = %lu", i, indexes[i]);
    }
 
    return true;
@@ -184,7 +184,7 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t decompressed_s
 //	   decompress_to(odev, buffer, HT_SPACE*i, HT_SPACE, (loff_t*) &ret);
    }
 */
-   decompress_by_jp(odev, buffer, tailer_jp, length, (loff_t*) &ret);
+   decompress_by_page(odev, buffer, tailer_jp, length, (loff_t*) &ret);
    
    pht = (struct lsmt_ht*) (buffer + remain );
    uint64_t *tmp = (uint64_t *) (buffer + remain );
