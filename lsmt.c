@@ -121,7 +121,21 @@ build_memory_index(const struct segment_mapping *pmappings, size_t n,
   return NULL;
 };
 
-bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool ownership) {
+bool read_index(struct ovbd_device* odev, size_t index_offset, size_t index_size) {
+   printk("reading index %u", index_size);
+   struct segment_mapping *indexes;
+   size_t ret, i;
+   indexes = kmalloc(sizeof(struct segment_mapping) * index_size, GFP_KERNEL);
+   memset(indexes, 0, sizeof(struct segment_mapping) * index_size);
+   decompress_by_addr(odev, indexes, index_offset, index_size, (loff_t*)&ret);
+   for (i = 0; i < 100; i++) {
+	   printk("readed result[%u] = %lu", i, indexes[i]);
+   }
+
+   return true;
+}
+
+bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t decompressed_size, bool ownership) {
    size_t ret, i;
    struct lsmt_ht* pht;
    struct lsmt_ro_index *pi = NULL;
@@ -129,13 +143,14 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool 
    struct segment_mapping *it = NULL;
    unsigned char* buffer; 
    loff_t pos = ZF_SPACE;
-   loff_t tailer_address = 0;
+   loff_t tailer_jp = 0;
    loff_t length = 0;
+   loff_t remain = 0;
 
-   printk("load_lsmt %u", filelen);
+   printk("load_lsmt %u", decompressed_size);
    buffer = kmalloc(HT_SPACE, GFP_KERNEL);
    memset(buffer, 0, HT_SPACE);
-   decompress_to(odev, buffer, 0, HT_SPACE, (loff_t*) &ret);
+   decompress_by_page(odev, buffer, 0, HT_SPACE, (loff_t*) &ret);
    if (ret != HT_SPACE) {
 	   printk("error loading header %u", ret);
 	   return false;
@@ -150,36 +165,53 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool 
        printk("failed to load header \n");
    } 
 
-   tailer_address = odev->jump_table[odev->jt_size - 3];
-   length = odev->jump_table[odev->jt_size - 2] - odev->jump_table[odev->jt_size - 3];
+   if ( decompressed_size % HT_SPACE) {
+       remain = decompressed_size % HT_SPACE;
+       printk("decompressed_size = %lu, remain = %lu", decompressed_size, remain);
+       tailer_jp = odev->jump_table[odev->jt_size - 3];
+       length = odev->jump_table[odev->jt_size - 2] - odev->jump_table[odev->jt_size - 3];
+   } else {
+       remain = 0;
+       tailer_jp = odev->jump_table[odev->jt_size - 2];
+       length = odev->jump_table[odev->jt_size - 1] - odev->jump_table[odev->jt_size - 2];
+   }
+
    
-   printk("last offset is %u", odev->jump_table[odev->jt_size - 1]);
-/*
+/*   printk("last offset is %u", odev->jump_table[odev->jt_size - 1]);
+
    for (i = 0; i < odev->jt_size ; i++) {
 	   printk ( "jump_table[%u] = %u ", i,  odev->jump_table[i]);
 //	   decompress_to(odev, buffer, HT_SPACE*i, HT_SPACE, (loff_t*) &ret);
    }
 */
-   decompress_range(odev, buffer, tailer_address, length, (loff_t*) &ret);
-   pht = (struct lsmt_ht*) buffer + (HT_SPACE + odev->jump_table[odev->jt_size - 1] - odev->jump_table[odev->jt_size - 2]);
+   decompress_by_jp(odev, buffer, tailer_jp, length, (loff_t*) &ret);
+   
+   pht = (struct lsmt_ht*) (buffer + remain );
+   uint64_t *tmp = (uint64_t *) (buffer + remain );
+   //uint32_t *tmp2 = (uint32_t *) (buffer + remain );
 
-   printk("after read tailer: size = %u, flag = %u, index_size = %u, index_offset = %u, virtual_size = %u",
+   printk("offset + remain %lu = %lu", remain, tmp );
+   printk("after read tailer: size = %lu, flag = %u, index_size = %u, index_offset = %lu, virtual_size = %lu",
 		   pht->size, pht->flags, pht->index_size, pht->index_offset, pht->virtual_size);
 
-   for (i = 0; i < 20; i++) {
-	printk("get uint64_t buffer[%u] = %llu", i, *( (uint64_t*) (buffer + i*8)) );
+   read_index(odev, pht->index_offset, pht->index_size);
+   /*
+   for (i = 0; i < 16; i++) {
+	printk("get uint64_t buffer[%u] = %lu", i, *( (uint64_t*) (tmp + i)) );
    }
-   for (i = 0; i < 40; i++) {
+   printk("now 32 bit ");
+   printk("..................................................................");
+   for (i = 0; i < (1536 / 4); i++) {
 	printk("get uint32_t buffer[%u] = %u", i, *( (uint32_t*) (buffer + i*4)) );
    }
+   */
 
-
-   size_t file_size = filelen;
+  /* size_t file_size = filelen;
    loff_t tailer_offset = file_size - HT_SPACE - ZF_SPACE;
    loff_t index_offset = pht->index_offset;
    printk("load_lsmt: index_offset %u", index_offset);
    ret = kernel_read(fp, buffer, HT_SPACE, &tailer_offset);
-   
+   */
    if ( ret < HT_SPACE) {
       printk("loading file failed");
       return false;
@@ -188,3 +220,4 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t filelen, bool 
    kfree(buffer);
    return true;
 }
+

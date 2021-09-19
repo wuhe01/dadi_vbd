@@ -106,7 +106,7 @@ struct lsmt_ht {
   // offset 24, 28
   uint32_t size;  //= sizeof(HeaderTrailer);
   uint32_t flags; //= 0;
-  uint64_t padding;
+//  uint64_t padding;
   // offset 32, 40, 48
   uint64_t index_offset; // in bytes
   uint64_t index_size;   // # of SegmentMappings
@@ -161,18 +161,22 @@ struct ovbd_device {
 
 	size_t *jump_table;
 	size_t jt_size;
-	struct file* compressed_fp;
  	unsigned char* path;
 	size_t file_size;
 	bool initialized ;
+	size_t virt_size;
+	struct segment* segments;
+	struct segment_mapping* segment_mapping;
+	struct lsmt_ro_index* m_index;
 
 };
 
 // open a zfile layer
 bool open_zfile( struct ovbd_device *odev, const char* file,  bool ownership);
-bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t length, loff_t* len);
-bool decompress_range( struct ovbd_device *odev, void* dst, loff_t start, loff_t length, loff_t* len);
-bool load_lsmt( struct ovbd_device *odev, struct file* file, size_t filelen, bool ownership);
+bool decompress_by_page( struct ovbd_device *odev, void* dst, loff_t start, loff_t length, loff_t* len);
+bool decompress_by_jp( struct ovbd_device *odev, void* dst, loff_t jump_start, loff_t length, loff_t* len);
+bool decompress_by_addr( struct ovbd_device *odev, void* dst, loff_t start, loff_t length, loff_t* len);
+bool load_lsmt( struct ovbd_device *odev, struct file* file, size_t decompressed_size, bool ownership);
 
 /*struct file *file_open(const char *path, int flags, int rights)
 void  file_close(struct file *file)

@@ -70,7 +70,7 @@ int get_blocks_length( struct ovbd_device* odev, size_t begin, size_t end) {
     return (get_range( odev, end) - get_range(odev, begin));
 }
 
-bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t length,  loff_t *dlen) {
+bool decompress_by_page( struct ovbd_device *odev, void* dst, loff_t start, loff_t length,  loff_t *dlen) {
    printk ("try decompress with [%d - %d]", start, start + length );
    size_t start_idx; 
    loff_t begin, range;
@@ -79,8 +79,6 @@ bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t le
 	begin = odev->jump_table[start_idx] + ZF_SPACE;
 	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
    } else {
-//   range = get_range(odev, start);
-
    	begin = start + ZF_SPACE;
 	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
    }
@@ -128,14 +126,12 @@ bool decompress_to( struct ovbd_device *odev, void* dst, loff_t start, loff_t le
    return true;
 }
 
-bool decompress_range( struct ovbd_device *odev, void* dst, loff_t start, loff_t length,  loff_t *dlen) {
-   printk ("try decompress with [%d - %d]", start, start + length );
-   if (start > odev->jump_table[odev->jt_size - 1] || length < 0 ) {
-	   printk("Can't be right, start %u length %d request denied.", start, length);
+bool decompress_by_jp( struct ovbd_device *odev, void* dst, loff_t jump_start, loff_t length,  loff_t *dlen) {
+   printk ("try decompress with jump [%d - %d]", jump_start, jump_start + length );
+   if (jump_start > odev->jump_table[odev->jt_size - 1] || length < 0 || length > HT_SPACE) {
+	   printk("Can't be right, jump start %u length %d request denied.", jump_start, length);
 	   return false;
    }
-
-   //printk("now we get begin = %u, range %u", begin, range);
 
    if (odev->path == NULL) {
 	   printk("device not initiated yet");
@@ -154,25 +150,42 @@ bool decompress_range( struct ovbd_device *odev, void* dst, loff_t start, loff_t
 	   return false;
    }
   
-   //printk("src_buf range {%u - %u}", begin , begin + range );
-   
-   loff_t begin = start + ZF_SPACE;
+   loff_t begin = jump_start + ZF_SPACE;
    size_t ret = file_read(fp, src_buf, length, &begin);
    if (ret !=  (length)) {
 	   printk( "Did read enough data, something may be wrong %d", ret);
 	   return false;
    }
-   //printk("loaded %d src data at offset [%d - %d]", ret, start, start + range); 
    
    ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, length - 4 , HT_SPACE);
    *dlen = ret;
    printk("Decompressed [%d]", *dlen);
 
    kfree(src_buf);
-   
    return true;
 }
 
+bool decompress_by_addr( struct ovbd_device *odev, void* dst, loff_t start_addr, loff_t length,  loff_t *dlen) {
+   printk ("try decompressing %d, length %d", start_addr, length );
+   int ret;
+   size_t start_idx; 
+   loff_t begin, range;
+   start_idx = start_addr / HT_SPACE ;
+   if ( start_idx >= 1 && odev->jump_table[start_idx] != 0 && start_idx < odev->jt_size ) {
+	begin = odev->jump_table[start_idx] + ZF_SPACE;
+	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
+   } else {
+   	begin = start_addr + ZF_SPACE;
+	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
+   }
+
+   ret = decompress_by_jp(odev, dst, begin, length, dlen);
+   if (!ret) {
+	   printk("decompress by jump table [%lu - %lu) failed", begin, length);
+	   return false;
+   }
+   return true;
+}
 
 bool test_decompress(struct ovbd_device* odev, size_t partial_size, size_t deltas_size) {
   size_t i, j;
@@ -283,7 +296,6 @@ bool open_zfile(struct ovbd_device* odev , const char* path, bool ownership) {
 	   printk("failed to load header \n");
    } 
 
-   odev->compressed_fp = fp;
    odev->path = kmalloc( strlen(path), GFP_KERNEL);
    memset(odev->path, 0, strlen(path));
    strncpy( odev->path, path, strlen(path));
@@ -317,7 +329,7 @@ bool open_zfile(struct ovbd_device* odev , const char* path, bool ownership) {
    /*for (i = 0 ; i < odev->jt_size ; i ++) {
 	   printk ("jump_table[%u] = %u", i, odev->jump_table[i]);
    } */
-   load_lsmt(odev, fp, file_size, ownership);
+   load_lsmt(odev, fp, zht->raw_data_size, ownership);
    
    odev->initialized = true;
    kfree(header_tail);
