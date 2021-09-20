@@ -101,6 +101,7 @@ size_t ro_index_size(const struct lsmt_ro_index *index) {
 struct lsmt_ro_index *
 build_memory_index(const struct segment_mapping *pmappings, size_t n,
                     uint64_t moffset_begin, uint64_t moffset_end, bool copy) {
+  printk("building_memory_index");
   struct lsmt_ro_index *ret = NULL;
     int index_size = sizeof(struct lsmt_ro_index);
     if (copy) {
@@ -118,29 +119,47 @@ build_memory_index(const struct segment_mapping *pmappings, size_t n,
       ret->pbegin = ret->mapping;
       ret->pend = ret->mapping + n;
     }
+    printk("build_memory_index %d", ret->mapping);
+
   return NULL;
 };
 
 bool read_index(struct ovbd_device* odev, size_t index_offset, size_t index_size) {
    struct segment_mapping *indexes;
+   struct segment_mapping *one ;
    size_t ret, i;
    size_t dst_size;
    dst_size = sizeof(struct segment_mapping) * index_size;
    printk("dst size %u", sizeof(struct segment_mapping));
    printk("reading index %u, decompress_size %u", index_size, dst_size);
-   indexes = decompress_by_addr(odev, index_offset, dst_size);
+   /*indexes = decompress_by_addr(odev, index_offset, dst_size);
   
    if (indexes == NULL) {
 	   printk("Can not decompress address %x", index_offset);
 	   return false;
-   }
+   }*/
 
+   /*
    for (i = 0; i < index_size; i++) {
       	   
       printk("offset[%u] = %lu, length %u ", i, indexes[i].offset, indexes[i].length);
       printk("moffset[%u] = %lu, zeroed = %u, tag = %u", i, indexes[i].moffset, indexes[i].zeroed, indexes[i].tag);
+   }*/
+
+   printk ("before decompress");
+   one = kmalloc( HT_SPACE, GFP_KERNEL);
+   memset(one, 0, HT_SPACE);
+   decompress_one_page(odev, one, index_offset);
+   printk ("after");
+
+   for (i = 0; i < 100; i++) {
+      	   
+      printk("offset[%u] = %lu, length %u ", i, one[i].offset, one[i].length);
+      printk("moffset[%u] = %u, zeroed = %u, tag = %u", i, one[i].moffset, one[i].zeroed, one[i].tag);
+      //printk("moffset[%u] = %lu, zeroed = %u, tag = %u", i, (one+i)->moffset, (one+i)->zeroed, (one+i)->tag);
    }
 
+   build_memory_index(one, 100, 0, 2000, false);
    kfree(indexes);
    return true;
 }
@@ -205,6 +224,9 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t decompressed_s
    printk("after read tailer: size = %lu, flag = %u, index_size = %u, index_offset = %lu, virtual_size = %lu",
 		   pht->size, pht->flags, pht->index_size, pht->index_offset, pht->virtual_size);
 
+   size_t trailer_offset = decompressed_size - HT_SPACE;
+   size_t index_bytes = pht->index_size * sizeof(struct segment_mapping);
+   printk("trailer_offset = %u, index_bytes = %u", trailer_offset, index_bytes);
    read_index(odev, pht->index_offset, pht->index_size);
    /*
    for (i = 0; i < 16; i++) {
@@ -223,10 +245,6 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t decompressed_s
    printk("load_lsmt: index_offset %u", index_offset);
    ret = kernel_read(fp, buffer, HT_SPACE, &tailer_offset);
    */
-   if ( ret < HT_SPACE) {
-      printk("loading file failed");
-      return false;
-   }
 
    kfree(buffer);
    return true;

@@ -186,19 +186,14 @@ void* decompress_by_addr( struct ovbd_device *odev, loff_t start_addr, loff_t le
    end_idx = (start_addr + length) / HT_SPACE;
    printk ("all idxes %u", end_idx - start_idx);
 
-   if ( start_idx >= 1 && odev->jump_table[start_idx] != 0 && start_idx < odev->jt_size ) {
-	offset = odev->jump_table[start_idx] + ZF_SPACE;
-   } else {
-   	offset = start_addr + ZF_SPACE;
-   }
 
    dst_buffer = kmalloc(HT_SPACE*(end_idx - start_idx), GFP_KERNEL); 
    memset(dst_buffer, 0, HT_SPACE*(end_idx-start_idx));
    for (i = 0; i < end_idx - start_idx ; i++) {
 
-        ret = decompress_by_jp(odev, dst_buffer + HT_SPACE * i, offset);
+        ret = decompress_one_page(odev, dst_buffer + HT_SPACE * i, start_addr + HT_SPACE*i);
         if (!ret) {
-	   printk("decompress by jump table [%lu - %lu) failed", offset, dst_buffer + HT_SPACE *i);
+	   printk("decompress by jump table [%lu - %lu) failed", start_idx, dst_buffer + HT_SPACE *i);
 	   return NULL;
         }
    }
