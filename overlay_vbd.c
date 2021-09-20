@@ -171,7 +171,7 @@ static bool ovbd_fill_page(struct ovbd_device *ovbd, sector_t sector, size_t n) 
 
 	struct page *page;
 	void *dst;
-	loff_t len;
+	int ret;
 	unsigned int offset = (sector & (PAGE_SECTORS-1)) << SECTOR_SHIFT;
 	if (!ovbd->initialized ) {
 		printk("zfile not ready yet");
@@ -183,8 +183,8 @@ static bool ovbd_fill_page(struct ovbd_device *ovbd, sector_t sector, size_t n) 
 	BUG_ON(!page);
 
 	dst = kmap_atomic(page);
-	decompress_by_page(ovbd, dst, offset, n, &len);
-	BUG_ON(len < 0);
+	ret = decompress_one_page(ovbd, dst, offset);
+	BUG_ON(ret < 0);
 	kunmap_atomic(dst);
 /*
 	if ( < n) {

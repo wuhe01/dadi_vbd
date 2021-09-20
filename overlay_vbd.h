@@ -173,9 +173,9 @@ struct ovbd_device {
 
 // open a zfile layer
 bool open_zfile( struct ovbd_device *odev, const char* file,  bool ownership);
-bool decompress_by_page( struct ovbd_device *odev, void* dst, loff_t start, loff_t length, loff_t* len);
-bool decompress_by_jp( struct ovbd_device *odev, void* dst, loff_t jump_start, loff_t length, loff_t* len);
-bool decompress_by_addr( struct ovbd_device *odev, void* dst, loff_t start, loff_t length, loff_t* len);
+bool decompress_one_page( struct ovbd_device *odev, void* dst, loff_t start);
+bool decompress_by_jp( struct ovbd_device *odev, void* dst, loff_t jump_start);
+void* decompress_by_addr( struct ovbd_device *odev, loff_t start, loff_t length);
 bool load_lsmt( struct ovbd_device *odev, struct file* file, size_t decompressed_size, bool ownership);
 
 /*struct file *file_open(const char *path, int flags, int rights)

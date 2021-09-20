@@ -70,31 +70,29 @@ int get_blocks_length( struct ovbd_device* odev, size_t begin, size_t end) {
     return (get_range( odev, end) - get_range(odev, begin));
 }
 
-bool decompress_by_page( struct ovbd_device *odev, void* dst, loff_t start, loff_t length,  loff_t *dlen) {
-   printk ("try decompress with [%d - %d]", start, start + length );
+bool decompress_one_page( struct ovbd_device *odev, void* dst, loff_t start) {
+   printk ("try decompress with page at [%d]", start );
    size_t start_idx; 
    loff_t begin, range;
    start_idx = start / HT_SPACE ;
    if ( start_idx >= 1 && odev->jump_table[start_idx] != 0 && start_idx < odev->jt_size ) {
 	begin = odev->jump_table[start_idx] + ZF_SPACE;
-	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
    } else {
    	begin = start + ZF_SPACE;
-	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
    }
 
-   //printk("now we get begin = %u, range %u", begin, range);
+   range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
 
    if (odev->path == NULL) {
-	   printk("device not initiated yet");
+	   printk("decompress_one_page device not initiated yet");
 	   return false;
    } else {
-	   printk("Using file (%s) as backend", odev->path);
+	   printk("by page using file (%s) as backend", odev->path);
    }
 
    unsigned char *src_buf; 
-   src_buf = kmalloc(range + 2,  GFP_KERNEL);
-   memset(src_buf, 0, range + 2);
+   src_buf = kmalloc(range + 1,  GFP_KERNEL);
+   memset(src_buf, 0, range + 1);
 
    struct file* fp = file_open( odev->path, 0, 644);
    if (!fp) {
@@ -102,11 +100,9 @@ bool decompress_by_page( struct ovbd_device *odev, void* dst, loff_t start, loff
 	   return false;
    }
   
-   //printk("src_buf range {%u - %u}", begin , begin + range );
-   
    size_t ret = file_read(fp, src_buf, range, &begin);
-   if (ret !=  (range)) {
-	   printk( "Did read enough data, something may be wrong %d", ret);
+   if (ret !=  range) {
+	   printk( "Did't read enough data, something may be wrong %d", ret);
 	   return false;
    }
    //printk("loaded %d src data at offset [%d - %d]", ret, start, start + range); 
@@ -117,19 +113,23 @@ bool decompress_by_page( struct ovbd_device *odev, void* dst, loff_t start, loff
 	printk("src_buf[%u]=%u", i, *((uint32_t*)(src_buf+i)));
    }*/
    
-   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, range - 4 , length);
-   *dlen = ret;
-   printk("Decompressed [%d]", *dlen);
+   ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, range - 4 , HT_SPACE);
+   if (ret < 0 ) {
+	   printk( "decompress page error");
+	   return false;
+   }
 
    kfree(src_buf);
    
    return true;
 }
 
-bool decompress_by_jp( struct ovbd_device *odev, void* dst, loff_t jump_start, loff_t length, loff_t *dlen) {
-   printk ("try decompress with jump range [%d - %d]", jump_start, jump_start + length );
-   if (jump_start > odev->jump_table[odev->jt_size - 1] || length < 0 || length > HT_SPACE) {
-	   printk("Can't be right, jump start %u length %d request denied.", jump_start, length);
+bool decompress_by_jp( struct ovbd_device *odev, void* dst, loff_t jump_start) {
+   loff_t length;
+   loff_t src_start, src_end;
+   printk ("try decompress with jump [%d]", jump_start);
+   if (jump_start > (odev->jt_size - 1) ) {
+	   printk("Can't be right, jump start %u ,request denied.", jump_start);
 	   return false;
    }
 
@@ -140,6 +140,15 @@ bool decompress_by_jp( struct ovbd_device *odev, void* dst, loff_t jump_start, l
 	   printk("Using file (%s) as backend", odev->path);
    }
 
+   src_start = odev->jump_table[jump_start];
+   src_end = odev->jump_table[jump_start+1];
+   length = src_end - src_start;
+   printk("jumptable [%lu - %lu]",src_start , src_end); 
+   printk("the src length is now %u", length);
+   if (length > HT_SPACE) {
+	   printk("source buffer too large, must be error");
+	   return false;
+   }
    unsigned char *src_buf; 
    src_buf = kmalloc(length,  GFP_KERNEL);
    memset(src_buf, 0, length);
@@ -150,7 +159,7 @@ bool decompress_by_jp( struct ovbd_device *odev, void* dst, loff_t jump_start, l
 	   return false;
    }
   
-   loff_t begin = jump_start + ZF_SPACE;
+   loff_t begin = src_start + ZF_SPACE;
    size_t ret = file_read(fp, src_buf, length, &begin);
    if (ret !=  (length)) {
 	   printk( "Did read enough data, something may be wrong %d", ret);
@@ -158,33 +167,42 @@ bool decompress_by_jp( struct ovbd_device *odev, void* dst, loff_t jump_start, l
    }
    
    ret = LZ4_decompress_safe(src_buf, (unsigned char *)dst, length - 4, HT_SPACE);
-   *dlen = ret;
-   printk("Decompressed [%d]", *dlen);
+   if (ret < 0) {
+	   printk ("Decompress error");
+	   return false;
+   }
 
    kfree(src_buf);
    return true;
 }
 
-bool decompress_by_addr( struct ovbd_device *odev, void* dst, loff_t start_addr, loff_t length,  loff_t *dlen) {
+void* decompress_by_addr( struct ovbd_device *odev, loff_t start_addr, loff_t length) {
    printk ("try decompressing %d, length %d", start_addr, length );
-   int ret;
-   size_t start_idx; 
-   loff_t begin, range;
+   int ret, i;
+   size_t start_idx, end_idx; 
+   void* dst_buffer;
+   loff_t offset;
    start_idx = start_addr / HT_SPACE ;
+   end_idx = (start_addr + length) / HT_SPACE;
+   printk ("all idxes %u", end_idx - start_idx);
+
    if ( start_idx >= 1 && odev->jump_table[start_idx] != 0 && start_idx < odev->jt_size ) {
-	begin = odev->jump_table[start_idx] + ZF_SPACE;
-	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
+	offset = odev->jump_table[start_idx] + ZF_SPACE;
    } else {
-   	begin = start_addr + ZF_SPACE;
-	range = odev->jump_table[start_idx + 1] - odev->jump_table[start_idx];
+   	offset = start_addr + ZF_SPACE;
    }
 
-   ret = decompress_by_jp(odev, dst, begin, length, dlen);
-   if (!ret) {
-	   printk("decompress by jump table [%lu - %lu) failed", begin, length);
-	   return false;
+   dst_buffer = kmalloc(HT_SPACE*(end_idx - start_idx), GFP_KERNEL); 
+   memset(dst_buffer, 0, HT_SPACE*(end_idx-start_idx));
+   for (i = 0; i < end_idx - start_idx ; i++) {
+
+        ret = decompress_by_jp(odev, dst_buffer + HT_SPACE * i, offset);
+        if (!ret) {
+	   printk("decompress by jump table [%lu - %lu) failed", offset, dst_buffer + HT_SPACE *i);
+	   return NULL;
+        }
    }
-   return true;
+   return dst_buffer;
 }
 
 bool test_decompress(struct ovbd_device* odev, size_t partial_size, size_t deltas_size) {

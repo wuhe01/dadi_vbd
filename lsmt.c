@@ -125,12 +125,16 @@ bool read_index(struct ovbd_device* odev, size_t index_offset, size_t index_size
    struct segment_mapping *indexes;
    size_t ret, i;
    size_t dst_size;
-   dst_size = sizeof(struct segment_mapping) * index_size / HT_SPACE + 1;
-   printk("dst size %lu", sizeof(struct segment_mapping));
+   dst_size = sizeof(struct segment_mapping) * index_size;
+   printk("dst size %u", sizeof(struct segment_mapping));
    printk("reading index %u, decompress_size %u", index_size, dst_size);
-   indexes = kmalloc( dst_size , GFP_KERNEL);
-   memset(indexes, 0, dst_size );
-   decompress_by_addr(odev, indexes, index_offset, index_size, (loff_t*)&ret);
+   indexes = decompress_by_addr(odev, index_offset, dst_size);
+  
+   if (indexes == NULL) {
+	   printk("Can not decompress address %x", index_offset);
+	   return false;
+   }
+
    for (i = 0; i < index_size; i++) {
       	   
       printk("offset[%u] = %lu, length %u ", i, indexes[i].offset, indexes[i].length);
@@ -153,11 +157,12 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t decompressed_s
    loff_t length = 0;
    loff_t remain = 0;
 
-   printk("load_lsmt %u", decompressed_size);
+   printk("load_lsmt decompressed_size %u", decompressed_size);
    buffer = kmalloc(HT_SPACE, GFP_KERNEL);
    memset(buffer, 0, HT_SPACE);
-   decompress_by_page(odev, buffer, 0, HT_SPACE, (loff_t*) &ret);
-   if (ret != HT_SPACE) {
+
+   ret = decompress_one_page(odev, buffer, 0 );
+   if (!ret) {
 	   printk("error loading header %u", ret);
 	   return false;
    }
@@ -167,21 +172,17 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t decompressed_s
    
    printk("after read header: size = %u, flag = %u, index_size = %u, index_offset = %u, virtual_size = %u",
 		   pht->size, pht->flags, pht->index_size, pht->index_offset, pht->virtual_size);
-   if ( ret < (ssize_t) HT_SPACE) {
-       printk("failed to load header \n");
-   } 
 
    if ( decompressed_size % HT_SPACE) {
        remain = decompressed_size % HT_SPACE;
-       printk("decompressed_size = %lu, remain = %lu", decompressed_size, remain);
-       tailer_jp = odev->jump_table[odev->jt_size - 3];
-       length = odev->jump_table[odev->jt_size - 2] - odev->jump_table[odev->jt_size - 3];
+       printk("load_lsmt: decompressed_size = %lu, remain = %lu", decompressed_size, remain);
+       tailer_jp = odev->jt_size - 3;
    } else {
        remain = 0;
-       tailer_jp = odev->jump_table[odev->jt_size - 2];
-       length = odev->jump_table[odev->jt_size - 1] - odev->jump_table[odev->jt_size - 2];
+       tailer_jp = odev->jt_size - 2;
    }
 
+   printk("tailer_jp = %u", tailer_jp);
    
 /*   printk("last offset is %u", odev->jump_table[odev->jt_size - 1]);
 
@@ -190,13 +191,17 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t decompressed_s
 //	   decompress_to(odev, buffer, HT_SPACE*i, HT_SPACE, (loff_t*) &ret);
    }
 */
-   decompress_by_jp(odev, buffer, tailer_jp, length, (loff_t*) &ret);
+   ret = decompress_by_jp(odev, buffer, tailer_jp);
+   if (!ret) {
+	   printk("decompress tailer failed");
+	   return false;
+   }
    
    pht = (struct lsmt_ht*) (buffer + remain );
-   uint64_t *tmp = (uint64_t *) (buffer + remain );
+   //uint64_t *tmp = (uint64_t *) (buffer + remain );
    //uint32_t *tmp2 = (uint32_t *) (buffer + remain );
 
-   printk("offset + remain %lu = %lu", remain, tmp );
+   //printk("offset + remain %lu = %lu", remain, tmp );
    printk("after read tailer: size = %lu, flag = %u, index_size = %u, index_offset = %lu, virtual_size = %lu",
 		   pht->size, pht->flags, pht->index_size, pht->index_offset, pht->virtual_size);
 
