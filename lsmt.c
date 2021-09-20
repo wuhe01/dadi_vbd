@@ -122,16 +122,22 @@ build_memory_index(const struct segment_mapping *pmappings, size_t n,
 };
 
 bool read_index(struct ovbd_device* odev, size_t index_offset, size_t index_size) {
-   printk("reading index %u", index_size);
    struct segment_mapping *indexes;
    size_t ret, i;
-   indexes = kmalloc(sizeof(struct segment_mapping) * index_size, GFP_KERNEL);
-   memset(indexes, 0, sizeof(struct segment_mapping) * index_size);
+   size_t dst_size;
+   dst_size = sizeof(struct segment_mapping) * index_size / HT_SPACE + 1;
+   printk("dst size %lu", sizeof(struct segment_mapping));
+   printk("reading index %u, decompress_size %u", index_size, dst_size);
+   indexes = kmalloc( dst_size , GFP_KERNEL);
+   memset(indexes, 0, dst_size );
    decompress_by_addr(odev, indexes, index_offset, index_size, (loff_t*)&ret);
-   for (i = 0; i < 100; i++) {
-      printk("readed result[%u] = %lu", i, indexes[i]);
+   for (i = 0; i < index_size; i++) {
+      	   
+      printk("offset[%u] = %lu, length %u ", i, indexes[i].offset, indexes[i].length);
+      printk("moffset[%u] = %lu, zeroed = %u, tag = %u", i, indexes[i].moffset, indexes[i].zeroed, indexes[i].tag);
    }
 
+   kfree(indexes);
    return true;
 }
 
@@ -184,7 +190,7 @@ bool load_lsmt(struct ovbd_device* odev , struct file* fp, size_t decompressed_s
 //	   decompress_to(odev, buffer, HT_SPACE*i, HT_SPACE, (loff_t*) &ret);
    }
 */
-   decompress_by_page(odev, buffer, tailer_jp, length, (loff_t*) &ret);
+   decompress_by_jp(odev, buffer, tailer_jp, length, (loff_t*) &ret);
    
    pht = (struct lsmt_ht*) (buffer + remain );
    uint64_t *tmp = (uint64_t *) (buffer + remain );
