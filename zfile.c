@@ -186,7 +186,6 @@ void* decompress_by_addr( struct ovbd_device *odev, loff_t start_addr, loff_t le
    end_idx = (start_addr + length) / HT_SPACE;
    printk ("all idxes %u", end_idx - start_idx);
 
-
    dst_buffer = kmalloc(HT_SPACE*(end_idx - start_idx), GFP_KERNEL); 
    memset(dst_buffer, 0, HT_SPACE*(end_idx-start_idx));
    for (i = 0; i < end_idx - start_idx ; i++) {
