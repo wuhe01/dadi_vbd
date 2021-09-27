@@ -1,4 +1,4 @@
-# dadi_vdb
+# dadi_vbd
 dadi block device driver mode
 
 
