@@ -53,13 +53,13 @@ static int max_part = 1;
 module_param(max_part, int, 0444);
 MODULE_PARM_DESC(max_part, "Num Minors to reserve between devices");
 
-static char *backfile = "/test.c";
+static char *backfile = "/test.lsmtz";
 module_param(backfile, charp, 0660);
 MODULE_PARM_DESC(backfile, "Back file for lsmtz");
 
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_BLOCKDEV_MAJOR(OVBD_MAJOR);
-MODULE_ALIAS("rd");
+MODULE_ALIAS("vbd");
 
 static void ovbd_unprepare_queue(struct ovbd_device *lo) {
     kthread_flush_worker(&lo->worker);
