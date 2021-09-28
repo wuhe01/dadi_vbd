@@ -205,8 +205,6 @@ static const struct blk_mq_ops ovbd_mq_ops = {
     .complete = ovbd_complete_rq,
 };
 
-// 直接拿file对象来处理了
-//比较偷懒的做法
 static struct ovbd_device *ovbd_alloc(int i) {
     struct ovbd_device *ovbd;
     struct gendisk *disk;
@@ -365,7 +363,6 @@ static int __init ovbd_init(void) {
 
     ovbd_check_and_reset_par();
 
-    // 先打开文件再创建设备
     pr_info("alloc");
     for (i = 0; i < 1; i++) {
         ovbd = ovbd_alloc(i);
