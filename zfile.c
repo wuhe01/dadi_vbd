@@ -7,6 +7,8 @@
 #include <linux/slab.h>
 #include <linux/uio.h>
 #include <linux/vmalloc.h>
+#include <linux/pagemap.h>
+#include <linux/file.h>
 
 #include "zfile.h"
 
@@ -57,6 +59,23 @@ static ssize_t file_read(struct file *file, void *buf, size_t count,
     return sret;
 }
 
+static ssize_t file_pread(struct file *file, void *buf , size_t count,
+                         loff_t pos) {
+    ssize_t ret, sret = 0;
+    loff_t lpos;
+    size_t flen = file_len(file);
+    if (pos > flen) return 0;
+    if (pos + count > flen) count = flen - pos;
+
+    struct address_space *mapping = file->f_mapping;
+    if (!mapping)
+	return 0;
+
+    struct page *to_load = read_cache_page( mapping, 
+		    pos / 4096, NULL, buf ); 
+    return sret;
+}
+
 size_t zfile_len(struct zfile *zfile) { return zfile->header.vsize; }
 
 struct path zfile_getpath(struct zfile *zfile) {
@@ -99,11 +118,11 @@ ssize_t zfile_read(struct zfile *zf, void *dst, size_t count, loff_t offset) {
     begin = zf->jump[start_idx].partial_offset;
     range = zf->jump[end_idx].partial_offset + zf->jump[end_idx].delta - begin;
 
-    src_buf = kmalloc(range, GFP_NOIO);
+    //src_buf = kmalloc(range, GFP_NOIO);
     decomp_buf = kmalloc(zf->header.opt.block_size, GFP_NOIO);
 
     // read compressed data
-    ret = file_read(zf->fp, src_buf, range, begin);
+    ret = file_pread(zf->fp, src_buf, range, begin);
     if (ret != range) {
         pr_info("zfile: Read file failed, %ld != %lld\n", ret, range);
         ret = -EIO;
